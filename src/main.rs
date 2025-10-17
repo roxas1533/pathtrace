@@ -3,11 +3,11 @@
 
 mod camera;
 mod math;
-mod object;
+mod objects;
 
 use camera::Camera;
 use math::Vector3;
-use object::{Hittable, MaterialType, Object, SphereShape};
+use objects::{Hittable, Mirror, Object, SphereShape};
 use pixels::{Error, Pixels, SurfaceTexture};
 use rand::Rng;
 use rayon::prelude::*;
@@ -19,7 +19,7 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 
-use crate::object::material::LambertianCosineWeighted;
+use crate::objects::material::LambertianCosineWeighted;
 
 const WIDTH: u32 = 400;
 const HEIGHT: u32 = 200;
@@ -112,7 +112,6 @@ fn main() -> Result<(), Error> {
             event: WindowEvent::RedrawRequested,
             ..
         } => {
-            // ピクセルデータから読み取るだけ（更新はしない）
             if let Ok(world) = world.lock() {
                 world.draw(pixels.frame_mut());
             }
@@ -120,7 +119,6 @@ fn main() -> Result<(), Error> {
                 eprintln!("pixels.render() failed: {err}");
                 elwt.exit();
             }
-            // 16ms後に再度描画をリクエスト
             thread::sleep(Duration::from_millis(16));
             window.request_redraw();
         }
@@ -144,29 +142,25 @@ impl World {
         let objects: Vec<Object> = vec![
             Object::new(
                 Box::new(SphereShape::new(Vector3::new(-1.0, 0.0, -1.0), 0.5)),
-                MaterialType::LambertianCosineWeighted(LambertianCosineWeighted::new(
-                    Vector3::new(0.1, 0.1, 0.1),
-                )), // 暗い球
+                Box::new(LambertianCosineWeighted::new(Vector3::new(0.1, 0.1, 0.1))), // 暗い球
             ),
             Object::new(
                 Box::new(SphereShape::new(Vector3::new(0.0, 0.0, -1.0), 0.5)),
-                MaterialType::Mirror(object::Mirror {
+                Box::new(Mirror {
                     roughness: 0.01,
                     color: Vector3::new(0.9, 0.1, 0.1),
                 }), // 鏡面反射する球
             ),
             Object::new(
                 Box::new(SphereShape::new(Vector3::new(1.0, 0.0, -1.0), 0.5)),
-                MaterialType::Mirror(object::Mirror {
+                Box::new(Mirror {
                     roughness: 0.31,
                     color: Vector3::new(0.9, 0.9, 0.9),
                 }), // 鏡面反射する球
             ),
             Object::new(
                 Box::new(SphereShape::new(Vector3::new(0.0, -100.5, 0.0), 100.0)),
-                MaterialType::LambertianCosineWeighted(LambertianCosineWeighted::new(
-                    Vector3::new(0.8, 0.8, 0.0),
-                )), // 黄色っぽい地面
+                Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.0))), // 黄色っぽい地面
             ),
         ];
 
@@ -188,7 +182,7 @@ impl World {
         ray: &camera::Ray,
         t_min: f64,
         t_max: f64,
-    ) -> Option<(object::HitRecord, &Object)> {
+    ) -> Option<(objects::HitRecord, &Object)> {
         let mut closest_hit = None;
         let mut closest_so_far = t_max;
         let mut hit_obj = None;

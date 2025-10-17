@@ -58,10 +58,8 @@ impl Camera {
         let vertical = Vector3::new(0.0, viewport_height, 0.0);
 
         // スクリーンの左下隅の位置
-        let lower_left_corner = origin
-            - horizontal / 2.0
-            - vertical / 2.0
-            - Vector3::new(0.0, 0.0, screen_distance);
+        let lower_left_corner =
+            origin - horizontal / 2.0 - vertical / 2.0 - Vector3::new(0.0, 0.0, screen_distance);
 
         Self {
             origin,
@@ -97,8 +95,8 @@ impl Camera {
 
         // カメラの座標系を構築
         let w = (origin - target).normalize(); // カメラの後ろ方向
-        let u = up.cross(&w).normalize();      // カメラの右方向
-        let v = w.cross(&u);                   // カメラの上方向
+        let u = up.cross(&w).normalize(); // カメラの右方向
+        let v = w.cross(&u); // カメラの上方向
 
         // スクリーンの距離を1.0とした場合のビューポートサイズ
         let screen_distance = 1.0;
@@ -108,10 +106,7 @@ impl Camera {
         let horizontal = u * viewport_width;
         let vertical = v * viewport_height;
 
-        let lower_left_corner = origin
-            - horizontal / 2.0
-            - vertical / 2.0
-            - w * screen_distance;
+        let lower_left_corner = origin - horizontal / 2.0 - vertical / 2.0 - w * screen_distance;
 
         Self {
             origin,
@@ -134,7 +129,8 @@ impl Camera {
         let u = x as f64 / (self.width - 1) as f64;
         let v = y as f64 / (self.height - 1) as f64;
 
-        let direction = self.lower_left_corner + self.horizontal * u + self.vertical * v - self.origin;
+        let direction =
+            self.lower_left_corner + self.horizontal * u + self.vertical * v - self.origin;
 
         Ray::new(self.origin, direction)
     }
@@ -150,7 +146,8 @@ impl Camera {
         let u = (x as f64 + offset_x) / (self.width - 1) as f64;
         let v = (y as f64 + offset_y) / (self.height - 1) as f64;
 
-        let direction = self.lower_left_corner + self.horizontal * u + self.vertical * v - self.origin;
+        let direction =
+            self.lower_left_corner + self.horizontal * u + self.vertical * v - self.origin;
 
         Ray::new(self.origin, direction)
     }
@@ -183,13 +180,7 @@ mod tests {
 
     #[test]
     fn test_camera_creation() {
-        let camera = Camera::new(
-            Vector3::new(0.0, 0.0, 0.0),
-            800,
-            600,
-            1.0,
-            90.0,
-        );
+        let camera = Camera::new(Vector3::new(0.0, 0.0, 0.0), 800, 600, 1.0, 90.0);
 
         assert_eq!(camera.origin(), Vector3::new(0.0, 0.0, 0.0));
         assert_eq!(camera.width(), 800);
@@ -211,10 +202,7 @@ mod tests {
 
     #[test]
     fn test_ray_at() {
-        let ray = Ray::new(
-            Vector3::new(0.0, 0.0, 0.0),
-            Vector3::new(1.0, 0.0, 0.0),
-        );
+        let ray = Ray::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0));
 
         let point = ray.at(5.0);
         assert!((point.x - 5.0).abs() < 1e-10);
@@ -224,13 +212,7 @@ mod tests {
 
     #[test]
     fn test_get_ray_center() {
-        let camera = Camera::new(
-            Vector3::new(0.0, 0.0, 0.0),
-            800,
-            600,
-            1.0,
-            90.0,
-        );
+        let camera = Camera::new(Vector3::new(0.0, 0.0, 0.0), 800, 600, 1.0, 90.0);
 
         // 画面中央のレイ
         let ray = camera.get_ray(400, 300);
@@ -243,9 +225,9 @@ mod tests {
     #[test]
     fn test_look_at() {
         let camera = Camera::look_at(
-            Vector3::new(0.0, 0.0, 5.0),  // カメラ位置
-            Vector3::new(0.0, 0.0, 0.0),  // 原点を見る
-            Vector3::new(0.0, 1.0, 0.0),  // Y軸が上
+            Vector3::new(0.0, 0.0, 5.0), // カメラ位置
+            Vector3::new(0.0, 0.0, 0.0), // 原点を見る
+            Vector3::new(0.0, 1.0, 0.0), // Y軸が上
             800,
             600,
             90.0,

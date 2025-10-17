@@ -124,7 +124,6 @@ impl Vector3 {
 
         (tangent * x + bitangent * y + *normal * z).normalize()
     }
-
 }
 
 // Vector3 + Vector3
@@ -235,7 +234,7 @@ impl Neg for Vector3 {
     }
 }
 
-pub fn tan2 (a: Vector3, b: Vector3) -> f64 {
+pub fn tan2(a: Vector3, b: Vector3) -> f64 {
     let cos_theta = a.dot(&b);
     let sin2_theta = 1.0 - cos_theta * cos_theta;
     if sin2_theta <= 0.0 {

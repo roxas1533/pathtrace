@@ -1,5 +1,5 @@
 use crate::math::{Vector3, tan2};
-use rand::Rng;
+use rand::{Rng, RngCore};
 
 /// マテリアルを表すtrait（BRDF、サンプリング、PDFを担当）
 pub trait Material: Send + Sync {
@@ -15,116 +15,73 @@ pub trait Material: Send + Sync {
     /// (brdf, pdf) のタプル
     fn brdf_pdf(&self, x: &Vector3, i: &Vector3, o: &Vector3, normal: &Vector3) -> (Vector3, f64);
 
-    /// BRDF値を取得（デフォルト実装はbrdf_pdfを使用）
-    fn brdf(&self, x: &Vector3, i: &Vector3, o: &Vector3, normal: &Vector3) -> Vector3 {
-        self.brdf_pdf(x, i, o, normal).0
-    }
-
     /// サンプリング方向を生成
     ///
     /// # Arguments
     /// * `normal` - 法線ベクトル
     /// * `incoming` - 入射方向（カメラから来る方向）
     /// * `rng` - 乱数生成器
-    fn sample_direction<R: Rng>(
+    fn sample_direction(
         &self,
         normal: &Vector3,
         incoming: &Vector3,
-        rng: &mut R,
+        rng: &mut dyn RngCore,
     ) -> Vector3;
 }
 
-/// マテリアルの種類を表すenum
-pub enum MaterialType {
-    #[allow(dead_code)]
-    Lambertian(Lambertian),
-    LambertianCosineWeighted(LambertianCosineWeighted),
-    Mirror(Mirror),
-}
-
-impl MaterialType {
-    /// BRDFとPDFを同時に取得（効率的）
-    pub fn brdf_pdf(
-        &self,
-        x: &Vector3,
-        i: &Vector3,
-        o: &Vector3,
-        normal: &Vector3,
-    ) -> (Vector3, f64) {
-        match self {
-            MaterialType::Lambertian(m) => m.brdf_pdf(x, i, o, normal),
-            MaterialType::LambertianCosineWeighted(m) => m.brdf_pdf(x, i, o, normal),
-            MaterialType::Mirror(m) => m.brdf_pdf(x, i, o, normal),
-        }
-    }
-
-    /// サンプリング方向を生成
-    pub fn sample_direction<R: Rng>(
-        &self,
-        normal: &Vector3,
-        incoming: &Vector3,
-        rng: &mut R,
-    ) -> Vector3 {
-        match self {
-            MaterialType::Lambertian(m) => m.sample_direction(normal, incoming, rng),
-            MaterialType::LambertianCosineWeighted(m) => m.sample_direction(normal, incoming, rng),
-            MaterialType::Mirror(m) => m.sample_direction(normal, incoming, rng),
-        }
-    }
-}
-
-/// Lambertian（拡散反射）マテリアル
-pub struct Lambertian {
-    /// アルベド（反射率）
-    pub albedo: Vector3,
-}
-
-#[allow(dead_code)]
-impl Lambertian {
-    /// 新しいLambertianマテリアルを作成
-    pub fn new(albedo: Vector3) -> Self {
-        Self { albedo }
-    }
-}
-
-impl Lambertian {
-    /// PDF値を計算（内部用）
-    fn pdf(&self, _normal: &Vector3, _direction: &Vector3) -> f64 {
-        // 一様半球分布のPDF = 1 / (2π)
-        1.0 / (2.0 * std::f64::consts::PI)
-    }
-}
-
-impl Material for Lambertian {
-    fn brdf_pdf(
-        &self,
-        _x: &Vector3,
-        _i: &Vector3,
-        o: &Vector3,
-        normal: &Vector3,
-    ) -> (Vector3, f64) {
-        let brdf = self.albedo / std::f64::consts::PI;
-        let pdf = self.pdf(normal, o);
-        (brdf, pdf)
-    }
-
-    fn sample_direction<R: Rng>(
-        &self,
-        normal: &Vector3,
-        _incoming: &Vector3,
-        rng: &mut R,
-    ) -> Vector3 {
-        // 一様半球サンプリング（入射方向は使わない）
-        Vector3::random_hemisphere_direction(normal, rng)
-    }
-}
-
+//
+// /// Lambertian（拡散反射）マテリアル
+// pub struct Lambertian {
+//     /// アルベド（反射率）
+//     pub albedo: Vector3,
+// }
+//
+// #[allow(dead_code)]
+// impl Lambertian {
+//     /// 新しいLambertianマテリアルを作成
+//     pub fn new(albedo: Vector3) -> Self {
+//         Self { albedo }
+//     }
+// }
+//
+// impl Lambertian {
+//     /// PDF値を計算（内部用）
+//     fn pdf(&self, _normal: &Vector3, _direction: &Vector3) -> f64 {
+//         // 一様半球分布のPDF = 1 / (2π)
+//         1.0 / (2.0 * std::f64::consts::PI)
+//     }
+// }
+//
+// impl Material for Lambertian {
+//     fn brdf_pdf(
+//         &self,
+//         _x: &Vector3,
+//         _i: &Vector3,
+//         o: &Vector3,
+//         normal: &Vector3,
+//     ) -> (Vector3, f64) {
+//         let brdf = self.albedo / std::f64::consts::PI;
+//         let pdf = self.pdf(normal, o);
+//         (brdf, pdf)
+//     }
+//
+//     fn sample_direction<R: Rng>(
+//         &self,
+//         normal: &Vector3,
+//         _incoming: &Vector3,
+//         rng: &mut R,
+//     ) -> Vector3 {
+//         // 一様半球サンプリング（入射方向は使わない）
+//         Vector3::random_hemisphere_direction(normal, rng)
+//     }
+// }
+//
 /// コサイン重み付きサンプリングを使用するLambertianマテリアル
 pub struct LambertianCosineWeighted {
     /// アルベド（反射率）
     pub albedo: Vector3,
 }
-
+//
 impl LambertianCosineWeighted {
     /// 新しいLambertianCosineWeightedマテリアルを作成
     pub fn new(albedo: Vector3) -> Self {
@@ -154,11 +111,11 @@ impl Material for LambertianCosineWeighted {
         (brdf, pdf)
     }
 
-    fn sample_direction<R: Rng>(
+    fn sample_direction(
         &self,
         normal: &Vector3,
         _incoming: &Vector3,
-        rng: &mut R,
+        rng: &mut dyn RngCore,
     ) -> Vector3 {
         // コサイン重み付きサンプリング
         let r1: f64 = rng.random();
@@ -218,11 +175,11 @@ impl Material for Mirror {
         (brdf, pdf)
     }
 
-    fn sample_direction<R: Rng>(
+    fn sample_direction(
         &self,
         normal: &Vector3,
         incoming: &Vector3,
-        rng: &mut R,
+        rng: &mut dyn RngCore,
     ) -> Vector3 {
         let r1: f64 = rng.random();
         let alpha = self.roughness * self.roughness;
