@@ -27,6 +27,18 @@ pub trait Material: Send + Sync {
         incoming: &Vector3,
         rng: &mut dyn RngCore,
     ) -> Vector3;
+
+    /// 発光量を返す（デフォルトは発光しない）
+    ///
+    /// # Arguments
+    /// * `_x` - 交差点の位置
+    /// * `_normal` - 法線ベクトル
+    ///
+    /// # Returns
+    /// 発光色と強度
+    fn emit(&self, _x: &Vector3, _normal: &Vector3) -> Vector3 {
+        Vector3::zero()
+    }
 }
 
 //
@@ -140,6 +152,41 @@ impl Material for LambertianCosineWeighted {
         let bitangent = normal.cross(&tangent);
 
         (tangent * x + bitangent * y + *normal * z).normalize()
+    }
+}
+
+/// 発光マテリアル（光源用）
+pub struct Emissive {
+    /// 発光色と強度
+    pub emission: Vector3,
+}
+
+impl Emissive {
+    /// 新しいEmissiveマテリアルを作成
+    pub fn new(emission: Vector3) -> Self {
+        Self { emission }
+    }
+}
+
+impl Material for Emissive {
+    fn brdf_pdf(&self, _x: &Vector3, _i: &Vector3, _o: &Vector3, _normal: &Vector3) -> (Vector3, f64) {
+        // 発光マテリアルは光を反射しない（黒体）
+        (Vector3::zero(), 1.0)
+    }
+
+    fn sample_direction(
+        &self,
+        normal: &Vector3,
+        _incoming: &Vector3,
+        _rng: &mut dyn RngCore,
+    ) -> Vector3 {
+        // 発光マテリアルは反射しないので、ダミーの方向を返す
+        // （実際には使われない）
+        *normal
+    }
+
+    fn emit(&self, _x: &Vector3, _normal: &Vector3) -> Vector3 {
+        self.emission
     }
 }
 

@@ -7,7 +7,7 @@ mod objects;
 
 use camera::Camera;
 use math::Vector3;
-use objects::{Hittable, Mirror, Object, SphereShape};
+use objects::{Emissive, Hittable, Mirror, Object, SphereShape};
 use pixels::{Error, Pixels, SurfaceTexture};
 use rand::Rng;
 use rayon::prelude::*;
@@ -153,10 +153,7 @@ impl World {
             ),
             Object::new(
                 Box::new(SphereShape::new(Vector3::new(1.0, 0.0, -1.0), 0.5)),
-                Box::new(Mirror {
-                    roughness: 0.31,
-                    color: Vector3::new(0.9, 0.9, 0.9),
-                }), // 鏡面反射する球
+                Box::new(Emissive::new(Vector3::new(1.0, 1.0, 1.0))), // 鏡面反射する球
             ),
             Object::new(
                 Box::new(SphereShape::new(Vector3::new(0.0, -100.5, 0.0), 100.0)),
@@ -208,6 +205,9 @@ impl World {
 
         // オブジェクトとの交差をチェック（自己交差を避けるため0.001から）
         if let Some((hit, obj)) = self.hit_scene(ray, 0.001, f64::INFINITY) {
+            // 発光を取得
+            let emitted = obj.material.emit(&hit.point, &hit.normal);
+
             // 入射方向（レイの方向）
             let incoming = ray.direction;
 
@@ -225,8 +225,8 @@ impl World {
             // 入射輝度を再帰的に計算
             let incoming_light = self.ray_color(&scattered_ray, depth - 1, rng);
 
-            // レンダリング方程式: brdf * 入射輝度 * cos(θ) / pdf
-            return brdf * incoming_light * cos_theta / pdf;
+            // レンダリング方程式: 発光 + brdf * 入射輝度 * cos(θ) / pdf
+            return emitted + brdf * incoming_light * cos_theta / pdf;
         }
 
         // 背景のグラデーション（空の色）
@@ -237,7 +237,7 @@ impl World {
         let g = (1.0 - t) * 1.0 + t * 0.7;
         let b = (1.0 - t) * 1.0 + t * 1.0;
 
-        Vector3::new(r, g, b)
+        Vector3::new(0.1, 0.1, 0.1)
     }
 
     // 1ピクセルをレンダリング（読み取り専用でカメラとオブジェクト情報を使用）
