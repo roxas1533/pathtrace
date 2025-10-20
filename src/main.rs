@@ -3,11 +3,12 @@
 mod camera;
 mod math;
 mod objects;
+mod rendering;
 mod world;
 
 use pixels::{Error, Pixels, SurfaceTexture};
 use rayon::prelude::*;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use winit::dpi::LogicalSize;
@@ -34,7 +35,8 @@ fn main() -> Result<(), Error> {
         let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
         Pixels::new(WIDTH, HEIGHT, surface_texture)?
     };
-    let world = Arc::new(Mutex::new(World::new()));
+
+    let world = Arc::new(World::new());
 
     let world_clone = Arc::clone(&world);
     thread::spawn(move || {
@@ -42,14 +44,16 @@ fn main() -> Result<(), Error> {
             .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
             .collect();
 
-        // rayonで並列処理
+        // rayonで並列処理：計算はロック外、書き込みだけロック
         pixels_coords.par_iter().for_each(|&(x, y)| {
             let mut rng = rand::rng();
 
-            let mut world = world_clone.lock().unwrap();
-            let color = world.render_pixel(x, y, &mut rng);
+            // ロック不要：読み取り専用の計算
+            let color = world_clone.render_pixel(x, y, &mut rng);
+
+            // ロック必要：書き込みのみ短時間ロック
             let index = (y * WIDTH + x) as usize;
-            world.data[index] = color;
+            world_clone.data.lock().unwrap()[index] = color;
         });
     });
 
@@ -66,9 +70,7 @@ fn main() -> Result<(), Error> {
             event: WindowEvent::RedrawRequested,
             ..
         } => {
-            if let Ok(world) = world.lock() {
-                world.draw(pixels.frame_mut());
-            }
+            world.draw(pixels.frame_mut());
             if let Err(err) = pixels.render() {
                 eprintln!("pixels.render() failed: {err}");
                 elwt.exit();

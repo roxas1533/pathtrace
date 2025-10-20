@@ -3,6 +3,11 @@ name = "pathtrace"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["nee"]
+nee = []
+brdf_only = []
+
 [dependencies]
 winit = "*"
 pixels = "*"

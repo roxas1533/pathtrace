@@ -28,9 +28,9 @@ pub trait Shape: Send + Sync {
     /// PDFは立体角測度または面積測度（実装に依存）
     fn sample_surface_from_point(
         &self,
-        point: &Vector3,
+        hit: &HitRecord,
         rng: &mut dyn RngCore,
-    ) -> (Vector3, Vector3, f64);
+    ) -> (Vector3, Vector3, f64, Vector3, f64);
 }
 
 /// 球形状
@@ -89,24 +89,16 @@ impl Shape for SphereShape {
 
     fn sample_surface_from_point(
         &self,
-        point: &Vector3,
+        hit: &HitRecord,
         rng: &mut dyn RngCore,
-    ) -> (Vector3, Vector3, f64) {
-        let to_center = self.center - *point;
+    ) -> (Vector3, Vector3, f64, Vector3, f64) {
+        let to_center = self.center - hit.point;
         let distance_sq = to_center.dot(&to_center);
-        let distance = distance_sq.sqrt();
-
-        // 球が点の内部または非常に近い場合は面積一様サンプリング
-        if distance <= self.radius * 1.001 {
-            return self.sample_surface_uniform(rng);
-        }
-
         // 立体角サンプリング
         // cos(theta_max) = sqrt(distance^2 - radius^2) / distance
         let sin_theta_max_sq = (self.radius * self.radius) / distance_sq;
         let cos_theta_max = (1.0 - sin_theta_max_sq).max(0.0).sqrt();
 
-        // コーン内で一様サンプリング
         let r1: f64 = rng.random();
         let r2: f64 = rng.random();
 
@@ -114,7 +106,6 @@ impl Shape for SphereShape {
         let sin_theta: f64 = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
         let phi = 2.0 * std::f64::consts::PI * r2;
 
-        // ローカル座標系を構築（to_centerをz軸とする）
         let w = to_center.normalize();
         let up = if w.y.abs() > 0.999 {
             Vector3::new(1.0, 0.0, 0.0)
@@ -125,12 +116,10 @@ impl Shape for SphereShape {
         let v = w.cross(&u);
 
         // サンプリング方向
-        let direction = u * (sin_theta * phi.cos())
-            + v * (sin_theta * phi.sin())
-            + w * cos_theta;
+        let direction = u * (sin_theta * phi.cos()) + v * (sin_theta * phi.sin()) + w * cos_theta;
 
         // レイを飛ばして球との交差点を求める
-        let sample_ray = Ray::new(*point, direction);
+        let sample_ray = Ray::new(hit.point, direction);
 
         // 球との交差計算
         let oc = sample_ray.origin - self.center;
@@ -139,45 +128,18 @@ impl Shape for SphereShape {
         let c = oc.dot(&oc) - self.radius * self.radius;
         let discriminant = half_b * half_b - a * c;
 
-        if discriminant < 0.0 {
-            // 交差しない場合（理論的には起きないはず）
-            return self.sample_surface_uniform(rng);
-        }
-
-        let t = (-half_b + discriminant.sqrt()) / a;
+        let t = (-half_b - discriminant.sqrt()) / a;
         let sampled_point = sample_ray.at(t);
         let normal = (sampled_point - self.center).normalize();
 
         // 立体角測度でのPDF = 1 / solid_angle
         let solid_angle = 2.0 * std::f64::consts::PI * (1.0 - cos_theta_max);
-        let pdf = 1.0 / solid_angle;
+        let pdf_omega = 1.0 / solid_angle;
 
-        (sampled_point, normal, pdf)
-    }
-}
+        let light_dir = sampled_point - hit.point;
+        let d = light_dir.length();
 
-impl SphereShape {
-    /// 球の表面を一様サンプリング（フォールバック用）
-    fn sample_surface_uniform(&self, rng: &mut dyn RngCore) -> (Vector3, Vector3, f64) {
-        let r1: f64 = rng.random();
-        let r2: f64 = rng.random();
-
-        let phi = 2.0 * std::f64::consts::PI * r1;
-        let cos_theta = 1.0 - 2.0 * r2;
-        let sin_theta: f64 = (1.0 - cos_theta * cos_theta).sqrt();
-
-        let x = sin_theta * phi.cos();
-        let y = sin_theta * phi.sin();
-        let z = cos_theta;
-
-        let local_point = Vector3::new(x, y, z);
-        let sampled_point = self.center + local_point * self.radius;
-        let normal = local_point;
-
-        let area = 4.0 * std::f64::consts::PI * self.radius * self.radius;
-        let pdf = 1.0 / area;
-
-        (sampled_point, normal, pdf)
+        (sampled_point, normal, pdf_omega, light_dir.normalize(), d)
     }
 }
 
@@ -235,9 +197,9 @@ impl Shape for TriangleShape {
 
     fn sample_surface_from_point(
         &self,
-        _point: &Vector3,
+        hit: &HitRecord,
         rng: &mut dyn RngCore,
-    ) -> (Vector3, Vector3, f64) {
+    ) -> (Vector3, Vector3, f64, Vector3, f64) {
         // 三角形の面積一様サンプリング
         let r1: f64 = rng.random();
         let r2: f64 = rng.random();
@@ -256,9 +218,15 @@ impl Shape for TriangleShape {
         let normal = edge1.cross(&edge2).normalize();
         let area = edge1.cross(&edge2).length() * 0.5;
 
-        // 面積測度でのPDF
-        let pdf = 1.0 / area;
+        let to_light = sampled_point - hit.point;
+        let d = to_light.length();
+        let light_dir = to_light / d;
+        let cos_light = normal.dot(&(-light_dir)).abs();
 
-        (sampled_point, normal, pdf)
+        // 面積測度PDFから立体角測度PDFへ変換
+        let pdf_area = 1.0 / area;
+        let pdf_omega = pdf_area * (d * d) / cos_light.max(1e-8);
+
+        (sampled_point, normal, pdf_omega, light_dir, d)
     }
 }
