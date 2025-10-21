@@ -5,6 +5,8 @@ use crate::objects::shape::TriangleShape;
 use crate::objects::{Emissive, HitRecord, Hittable, Mirror, Object, SphereShape};
 #[cfg(feature = "brdf_only")]
 use crate::rendering::BrdfOnlyStrategy;
+#[cfg(feature = "mis")]
+use crate::rendering::MisStrategy;
 #[cfg(feature = "nee")]
 use crate::rendering::NeeStrategy;
 use crate::rendering::RenderingStrategy;
@@ -13,7 +15,7 @@ use std::sync::Mutex;
 
 pub const WIDTH: u32 = 400;
 pub const HEIGHT: u32 = 400;
-pub const SAMPLE_NUM: u32 = 100; // 1ピクセルあたりのサンプル数
+pub const SAMPLE_NUM: u32 = 500; // 1ピクセルあたりのサンプル数
 
 #[derive(Clone, Copy)]
 pub struct Color {
@@ -160,36 +162,36 @@ impl World {
                 Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
             ),
             // 天井の光源
-            Object::new(
-                Box::new(TriangleShape::new(
-                    Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
-                    Vector3::new(light_size, box_size - 0.01, box_depth - light_size),
-                    Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
-                )),
-                Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
-            ),
-            Object::new(
-                Box::new(TriangleShape::new(
-                    Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
-                    Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
-                    Vector3::new(-light_size, box_size - 0.01, box_depth + light_size),
-                )),
-                Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
-            ),
-            // 球体光源
             // Object::new(
-            //     Box::new(SphereShape::new(
-            //         Vector3::new(0.0, box_size - 0.21, box_depth),
-            //         0.2,
+            //     Box::new(TriangleShape::new(
+            //         Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
+            //         Vector3::new(light_size, box_size - 0.01, box_depth - light_size),
+            //         Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
             //     )),
             //     Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
             // ),
+            // Object::new(
+            //     Box::new(TriangleShape::new(
+            //         Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
+            //         Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
+            //         Vector3::new(-light_size, box_size - 0.01, box_depth + light_size),
+            //     )),
+            //     Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
+            // ),
+            // 球体光源
+            Object::new(
+                Box::new(SphereShape::new(
+                    Vector3::new(0.0, box_size - 0.21, box_depth),
+                    0.2,
+                )),
+                Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
+            ),
             // 中央の球体（テスト用）
             Object::new(
                 Box::new(SphereShape::new(Vector3::new(-0.4, -0.5, box_depth), 0.4)),
                 Box::new(Mirror {
                     roughness: 0.01,
-                    color: Vector3::new(0.9, 0.9, 0.9),
+                    color: Vector3::new(0.3, 0.3, 0.3),
                 }),
             ),
             Object::new(
@@ -242,7 +244,7 @@ impl World {
         let light_idx = self.light_indices[rng.random_range(0..self.light_indices.len())];
         let light_obj = &self.objects[light_idx];
         let (sampled_point, normal, pdf_shape, _light_dir, _d) =
-            light_obj.shape.sample_surface_from_point(hit, rng);
+            light_obj.shape.sample_surface_from_point(hit, None, rng);
         let emission = light_obj.material.emit(&sampled_point, &normal);
         let pdf = pdf_shape / self.light_indices.len() as f64;
 
@@ -279,7 +281,6 @@ impl World {
     // 1ピクセルをレンダリング（読み取り専用でカメラとオブジェクト情報を使用）
     pub fn render_pixel(&self, x: u32, y: u32, rng: &mut impl Rng) -> Color {
         let mut color_temp = Vector3::new(0.0, 0.0, 0.0);
-        const MAX_DEPTH: u32 = 5; // 最大再帰深度
 
         for _ in 0..SAMPLE_NUM {
             let ray =
@@ -288,11 +289,15 @@ impl World {
 
             #[cfg(feature = "nee")]
             {
-                color_temp += NeeStrategy::ray_color(self, &ray, MAX_DEPTH, true, rng);
+                color_temp += NeeStrategy::ray_color(self, &ray, 0, true, rng);
             }
             #[cfg(feature = "brdf_only")]
             {
-                color_temp += BrdfOnlyStrategy::ray_color(self, &ray, MAX_DEPTH, true, rng);
+                color_temp += BrdfOnlyStrategy::ray_color(self, &ray, 0, true, rng);
+            }
+            #[cfg(feature = "mis")]
+            {
+                color_temp += MisStrategy::ray_color(self, &ray, 0, rng, Vector3::zero());
             }
         }
 

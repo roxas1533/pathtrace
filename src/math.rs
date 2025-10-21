@@ -124,6 +124,10 @@ impl Vector3 {
 
         (tangent * x + bitangent * y + *normal * z).normalize()
     }
+
+    pub fn max(&self) -> f64 {
+        self.x.max(self.y).max(self.z)
+    }
 }
 
 // Vector3 + Vector3

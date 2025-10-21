@@ -17,18 +17,19 @@ pub trait Shape: Send + Sync {
     /// 交差した場合は `Some(HitRecord)`、しなかった場合は `None`
     fn hit(&self, ray: &Ray, t_min: f64, t_max: f64) -> Option<HitRecord>;
 
-    /// 指定した点から見える形状の表面をサンプリング
+    /// 指定した点から見える形状の表面をサンプリング、またはPDF計算
     ///
     /// # Arguments
-    /// * `point` - 観測点（衝突点）
+    /// * `hit_from` - 観測点（衝突点）
+    /// * `target_hit` - MIS用：PDFを計算する目標点。Noneの場合はランダムサンプリング
     /// * `rng` - 乱数生成器
     ///
     /// # Returns
-    /// (サンプリングされた点, 法線, PDF)
-    /// PDFは立体角測度または面積測度（実装に依存）
+    /// (サンプリングされた点, 法線, 立体角測度PDF, 方向, 距離)
     fn sample_surface_from_point(
         &self,
-        hit: &HitRecord,
+        hit_from: &HitRecord,
+        target_hit: Option<&HitRecord>,
         rng: &mut dyn RngCore,
     ) -> (Vector3, Vector3, f64, Vector3, f64);
 }
@@ -89,54 +90,55 @@ impl Shape for SphereShape {
 
     fn sample_surface_from_point(
         &self,
-        hit: &HitRecord,
+        hit_from: &HitRecord,
+        target_hit: Option<&HitRecord>,
         rng: &mut dyn RngCore,
     ) -> (Vector3, Vector3, f64, Vector3, f64) {
-        let to_center = self.center - hit.point;
+        let to_center = self.center - hit_from.point;
         let distance_sq = to_center.dot(&to_center);
-        // 立体角サンプリング
-        // cos(theta_max) = sqrt(distance^2 - radius^2) / distance
         let sin_theta_max_sq = (self.radius * self.radius) / distance_sq;
         let cos_theta_max = (1.0 - sin_theta_max_sq).max(0.0).sqrt();
 
-        let r1: f64 = rng.random();
-        let r2: f64 = rng.random();
-
-        let cos_theta = 1.0 - r1 + r1 * cos_theta_max;
-        let sin_theta: f64 = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
-        let phi = 2.0 * std::f64::consts::PI * r2;
-
-        let w = to_center.normalize();
-        let up = if w.y.abs() > 0.999 {
-            Vector3::new(1.0, 0.0, 0.0)
-        } else {
-            Vector3::new(0.0, 1.0, 0.0)
-        };
-        let u = up.cross(&w).normalize();
-        let v = w.cross(&u);
-
-        // サンプリング方向
-        let direction = u * (sin_theta * phi.cos()) + v * (sin_theta * phi.sin()) + w * cos_theta;
-
-        // レイを飛ばして球との交差点を求める
-        let sample_ray = Ray::new(hit.point, direction);
-
-        // 球との交差計算
-        let oc = sample_ray.origin - self.center;
-        let a = direction.dot(&direction);
-        let half_b = oc.dot(&direction);
-        let c = oc.dot(&oc) - self.radius * self.radius;
-        let discriminant = half_b * half_b - a * c;
-
-        let t = (-half_b - discriminant.sqrt()) / a;
-        let sampled_point = sample_ray.at(t);
-        let normal = (sampled_point - self.center).normalize();
-
-        // 立体角測度でのPDF = 1 / solid_angle
+        // 立体角測度でのPDF
         let solid_angle = 2.0 * std::f64::consts::PI * (1.0 - cos_theta_max);
         let pdf_omega = 1.0 / solid_angle;
 
-        let light_dir = sampled_point - hit.point;
+        // target_hitがある場合はその点を使う
+        let sampled_point = if let Some(target) = target_hit {
+            target.point
+        } else {
+            // ランダムサンプリング
+            let r1: f64 = rng.random();
+            let r2: f64 = rng.random();
+
+            let cos_theta = 1.0 - r1 + r1 * cos_theta_max;
+            let sin_theta: f64 = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
+            let phi = 2.0 * std::f64::consts::PI * r2;
+
+            let w = to_center.normalize();
+            let up = if w.y.abs() > 0.999 {
+                Vector3::new(1.0, 0.0, 0.0)
+            } else {
+                Vector3::new(0.0, 1.0, 0.0)
+            };
+            let u = up.cross(&w).normalize();
+            let v = w.cross(&u);
+
+            let direction = u * (sin_theta * phi.cos()) + v * (sin_theta * phi.sin()) + w * cos_theta;
+            let sample_ray = Ray::new(hit_from.point, direction);
+
+            let oc = sample_ray.origin - self.center;
+            let a = direction.dot(&direction);
+            let half_b = oc.dot(&direction);
+            let c = oc.dot(&oc) - self.radius * self.radius;
+            let discriminant = half_b * half_b - a * c;
+
+            let t = (-half_b - discriminant.sqrt()) / a;
+            sample_ray.at(t)
+        };
+
+        let normal = (sampled_point - self.center).normalize();
+        let light_dir = sampled_point - hit_from.point;
         let d = light_dir.length();
 
         (sampled_point, normal, pdf_omega, light_dir.normalize(), d)
@@ -197,20 +199,25 @@ impl Shape for TriangleShape {
 
     fn sample_surface_from_point(
         &self,
-        hit: &HitRecord,
+        hit_from: &HitRecord,
+        target_hit: Option<&HitRecord>,
         rng: &mut dyn RngCore,
     ) -> (Vector3, Vector3, f64, Vector3, f64) {
-        // 三角形の面積一様サンプリング
-        let r1: f64 = rng.random();
-        let r2: f64 = rng.random();
+        // target_hitがある場合はその点を使い、ない場合はランダムサンプリング
+        let sampled_point = if let Some(target) = target_hit {
+            target.point
+        } else {
+            // 三角形の面積一様サンプリング
+            let r1: f64 = rng.random();
+            let r2: f64 = rng.random();
 
-        // 三角形上の一様分布
-        let sqrt_r1 = r1.sqrt();
-        let u = 1.0 - sqrt_r1;
-        let v = r2 * sqrt_r1;
+            // 三角形上の一様分布
+            let sqrt_r1 = r1.sqrt();
+            let u = 1.0 - sqrt_r1;
+            let v = r2 * sqrt_r1;
 
-        // サンプリングされた点
-        let sampled_point = self.v0 + (self.v1 - self.v0) * u + (self.v2 - self.v0) * v;
+            self.v0 + (self.v1 - self.v0) * u + (self.v2 - self.v0) * v
+        };
 
         // 法線と面積
         let edge1 = self.v1 - self.v0;
@@ -218,14 +225,18 @@ impl Shape for TriangleShape {
         let normal = edge1.cross(&edge2).normalize();
         let area = edge1.cross(&edge2).length() * 0.5;
 
-        let to_light = sampled_point - hit.point;
+        let to_light = sampled_point - hit_from.point;
         let d = to_light.length();
         let light_dir = to_light / d;
-        let cos_light = normal.dot(&(-light_dir)).abs();
+        let cos_light = normal.dot(&(-light_dir)).abs();  // 両面発光に対応
 
         // 面積測度PDFから立体角測度PDFへ変換
         let pdf_area = 1.0 / area;
-        let pdf_omega = pdf_area * (d * d) / cos_light.max(1e-8);
+        let pdf_omega = if cos_light > 1e-8 {
+            pdf_area * (d * d) / cos_light
+        } else {
+            1e-8  // 完全に平行な場合の安全値
+        };
 
         (sampled_point, normal, pdf_omega, light_dir, d)
     }
