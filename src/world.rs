@@ -1,6 +1,6 @@
 use crate::camera::{Camera, Ray};
 use crate::math::Vector3;
-use crate::objects::material::LambertianCosineWeighted;
+use crate::objects::material::{LambertianCosineWeighted, PBRMaterial};
 use crate::objects::shape::TriangleShape;
 use crate::objects::{Emissive, HitRecord, Hittable, Mirror, Object, SphereShape};
 #[cfg(feature = "brdf_only")]
@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 pub const WIDTH: u32 = 400;
 pub const HEIGHT: u32 = 400;
-pub const SAMPLE_NUM: u32 = 500; // 1ピクセルあたりのサンプル数
+pub const SAMPLE_NUM: u32 = 2000; // 1ピクセルあたりのサンプル数
 
 #[derive(Clone, Copy)]
 pub struct Color {
@@ -162,42 +162,52 @@ impl World {
                 Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
             ),
             // 天井の光源
-            // Object::new(
-            //     Box::new(TriangleShape::new(
-            //         Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
-            //         Vector3::new(light_size, box_size - 0.01, box_depth - light_size),
-            //         Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
-            //     )),
-            //     Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
-            // ),
-            // Object::new(
-            //     Box::new(TriangleShape::new(
-            //         Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
-            //         Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
-            //         Vector3::new(-light_size, box_size - 0.01, box_depth + light_size),
-            //     )),
-            //     Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
-            // ),
-            // 球体光源
             Object::new(
-                Box::new(SphereShape::new(
-                    Vector3::new(0.0, box_size - 0.21, box_depth),
-                    0.2,
+                Box::new(TriangleShape::new(
+                    Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
+                    Vector3::new(light_size, box_size - 0.01, box_depth - light_size),
+                    Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
                 )),
                 Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
             ),
-            // 中央の球体（テスト用）
             Object::new(
-                Box::new(SphereShape::new(Vector3::new(-0.4, -0.5, box_depth), 0.4)),
-                Box::new(Mirror {
-                    roughness: 0.01,
-                    color: Vector3::new(0.3, 0.3, 0.3),
-                }),
+                Box::new(TriangleShape::new(
+                    Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
+                    Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
+                    Vector3::new(-light_size, box_size - 0.01, box_depth + light_size),
+                )),
+                Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
             ),
+            // 球体光源
+            // Object::new(
+            //     Box::new(SphereShape::new(
+            //         Vector3::new(0.0, box_size - 0.21, box_depth),
+            //         0.2,
+            //     )),
+            //     Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
+            // ),
+            // 中央の球体（テスト用）
+            // Object::new(
+            //     Box::new(SphereShape::new(Vector3::new(-0.4, -0.5, box_depth), 0.4)),
+            //     Box::new(Mirror {
+            //         roughness: 0.05,
+            //         color: Vector3::new(0.1, 0.1, 0.1),
+            //         metallic: 0.0,
+            //         ior: 0.35,
+            //     }),
+            // ),
             Object::new(
                 Box::new(SphereShape::new(Vector3::new(0.4, -0.5, box_depth), 0.4)),
-                Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
+                Box::new(PBRMaterial::new(
+                    0.3,                              // roughness: やや滑らかなプラスチック
+                    Vector3::new(0.1, 0.1, 0.8), // albedo: 青色
+                    0.0                               // metallic: 非金属（プラスチック）
+                )),
             ),
+            // Object::new(
+            //     Box::new(SphereShape::new(Vector3::new(0.4, -0.5, box_depth), 0.4)),
+            //     Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
+            // ),
         ];
 
         // 光源オブジェクトを識別
@@ -297,7 +307,7 @@ impl World {
             }
             #[cfg(feature = "mis")]
             {
-                color_temp += MisStrategy::ray_color(self, &ray, 0, rng, Vector3::zero());
+                color_temp += MisStrategy::ray_color(self, &ray, 0, rng);
             }
         }
 

@@ -3,16 +3,13 @@ use crate::math::Vector3;
 use crate::world::World;
 use rand::Rng;
 const MIN_DEPTH: u32 = 4;
-const THRESHOLD: f64 = 0.01;
+const MAX_DEPTH: u32 = 50;
+
+/// 1つの衝突点あたりの光源サンプリング数
+const NUM_LIGHT_SAMPLES: usize = 1;
 
 pub trait RenderingStrategy {
-    fn ray_color(
-        world: &World,
-        ray: &Ray,
-        depth: u32,
-        rng: &mut impl Rng,
-        throughput: Vector3,
-    ) -> Vector3;
+    fn ray_color(world: &World, ray: &Ray, depth: u32, rng: &mut impl Rng) -> Vector3;
 }
 
 /// MIS（Multiple Importance Sampling）戦略
@@ -21,17 +18,7 @@ pub struct MisStrategy;
 
 #[cfg(feature = "mis")]
 impl RenderingStrategy for MisStrategy {
-    fn ray_color(
-        world: &World,
-        ray: &Ray,
-        depth: u32,
-        rng: &mut impl Rng,
-        throughput: Vector3,
-    ) -> Vector3 {
-        if depth > MIN_DEPTH && throughput.max() < THRESHOLD {
-            return Vector3::zero();
-        }
-
+    fn ray_color(world: &World, ray: &Ray, depth: u32, rng: &mut impl Rng) -> Vector3 {
         if let Some((hit, obj)) = world.hit_scene(ray, 0.001, f64::INFINITY) {
             let emitted = obj.material.emit(&hit.point, &hit.normal);
             if emitted.length() > 0.0 {
@@ -45,37 +32,57 @@ impl RenderingStrategy for MisStrategy {
             let mut total_radiance = Vector3::zero();
 
             let incoming = ray.direction;
-            if let Some(light_sample) = world.sample_light_point(&hit, rng) {
-                // 光源への方向ベクトル
-                let to_light = light_sample.point - hit.point;
-                let distance = to_light.length();
-                let light_dir = to_light.normalize();
 
-                let shadow_ray = Ray::new(hit.point, light_dir);
-                let is_visible = world
-                    .hit_scene(&shadow_ray, 0.001, distance - 0.001)
-                    .is_none();
+            // NEE: 複数回光源をサンプリング
+            let mut direct_light = Vector3::zero();
+            for _ in 0..NUM_LIGHT_SAMPLES {
+                if let Some(light_sample) = world.sample_light_point(&hit, rng) {
+                    // 光源への方向ベクトル
+                    let to_light = light_sample.point - hit.point;
+                    let distance = to_light.length();
+                    let light_dir = to_light.normalize();
 
-                if is_visible {
-                    // シェーディング点でのcos項
-                    let cos_theta = hit.normal.dot(&light_dir).abs();
+                    let shadow_ray = Ray::new(hit.point, light_dir);
+                    let is_visible = world
+                        .hit_scene(&shadow_ray, 0.001, distance - 0.001)
+                        .is_none();
 
-                    // BRDFを計算
-                    let (brdf, pdf_bsdf) =
-                        obj.brdf_pdf(&hit.point, &(-incoming), &light_dir, &hit.normal);
-                    let w_nee = light_sample.pdf / (light_sample.pdf + pdf_bsdf);
+                    if is_visible {
+                        // シェーディング点でのcos項
+                        let cos_theta = hit.normal.dot(&light_dir).abs();
 
-                    // 直接照明の計算: BRDF * emission * cos(θ) / pdf_omega
-                    total_radiance +=
-                        w_nee * brdf * light_sample.emission * cos_theta / light_sample.pdf;
+                        // BRDFを計算
+                        let (brdf, pdf_bsdf, _) =
+                            obj.brdf_pdf(&hit.point, &(-incoming), &light_dir, &hit.normal);
+                        let w_nee = light_sample.pdf / (light_sample.pdf + pdf_bsdf);
+
+                        // 直接照明の計算: BRDF * emission * cos(θ) / pdf_omega
+                        direct_light +=
+                            w_nee * brdf * light_sample.emission * cos_theta / light_sample.pdf;
+                    }
                 }
             }
+            // 平均を取る
+            total_radiance += direct_light / NUM_LIGHT_SAMPLES as f64;
 
             let scattered_direction = obj.sample_direction(&hit.normal, &incoming, rng);
             let scattered_ray = Ray::new(hit.point, scattered_direction);
             let cos_theta = scattered_direction.dot(&hit.normal).max(0.0);
-            let (brdf, pdf) =
+            let (brdf, pdf, rr_prob) =
                 obj.brdf_pdf(&hit.point, &(-incoming), &scattered_direction, &hit.normal);
+            // ロシアンルーレット
+            let rr_prob = if depth < MIN_DEPTH {
+                1.0
+            } else if depth >= MAX_DEPTH {
+                // MAX_DEPTHを超えたら確率を急激に下げる（指数関数的減衰）
+                let excess_depth = (depth - MAX_DEPTH + 1) as f64;
+                (rr_prob.max() / (2.0_f64.powf(excess_depth))).max(0.01)
+            } else {
+                rr_prob.max()
+            };
+            if rng.random::<f64>() > rr_prob {
+                return total_radiance;
+            }
 
             if let Some((scattered_hit, obj)) =
                 world.hit_scene(&scattered_ray, 0.001, f64::INFINITY)
@@ -96,11 +103,10 @@ impl RenderingStrategy for MisStrategy {
                             .material
                             .emit(&scattered_hit.point, &scattered_hit.normal)
                         * cos_theta
-                        / pdf;
+                        / (pdf * rr_prob);
                 } else {
-                    let incoming_light =
-                        Self::ray_color(world, &scattered_ray, depth + 1, rng, total_radiance);
-                    total_radiance += brdf * incoming_light * cos_theta / pdf;
+                    let incoming_light = Self::ray_color(world, &scattered_ray, depth + 1, rng);
+                    total_radiance += brdf * incoming_light * cos_theta / (pdf * rr_prob);
                 }
             }
 
