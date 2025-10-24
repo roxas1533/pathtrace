@@ -46,7 +46,7 @@ impl Object {
     pub fn sample_direction<R: rand::Rng>(
         &self,
         normal: &Vector3,
-        incoming: &Vector3,
+        incoming: &Ray,
         rng: &mut R,
     ) -> Vector3 {
         self.material.sample_direction(normal, incoming, rng)

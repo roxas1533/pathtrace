@@ -3,6 +3,7 @@ use crate::math::Vector3;
 pub struct Ray {
     pub origin: Vector3,
     pub direction: Vector3,
+    pub eta_ratio: f64,
 }
 
 impl Ray {
@@ -10,6 +11,7 @@ impl Ray {
         Self {
             origin,
             direction: direction.normalize(),
+            eta_ratio: 1.0,
         }
     }
 

@@ -1,4 +1,7 @@
-use crate::math::{Vector3, tan2};
+use crate::{
+    camera::Ray,
+    math::{Vector3, tan2},
+};
 use rand::{Rng, RngCore};
 
 /// マテリアルを表すtrait（BRDF、サンプリング、PDFを担当）
@@ -20,6 +23,15 @@ pub trait Material: Send + Sync {
         o: &Vector3,
         normal: &Vector3,
     ) -> (Vector3, f64, Vector3);
+    fn btdf_pdf(
+        &self,
+        x: &Vector3,
+        i: &Vector3,
+        o: &Vector3,
+        normal: &Vector3,
+    ) -> (Vector3, f64, Vector3) {
+        self.brdf_pdf(x, i, o, normal)
+    }
 
     /// サンプリング方向を生成
     ///
@@ -27,12 +39,20 @@ pub trait Material: Send + Sync {
     /// * `normal` - 法線ベクトル
     /// * `incoming` - 入射方向（カメラから来る方向）
     /// * `rng` - 乱数生成器
-    fn sample_direction(
+    fn sample_direction(&self, normal: &Vector3, incoming: &Ray, rng: &mut dyn RngCore) -> Vector3;
+
+    fn sample_direction_btdf(
         &self,
         normal: &Vector3,
-        incoming: &Vector3,
+        incoming: &Ray,
         rng: &mut dyn RngCore,
-    ) -> Vector3;
+    ) -> Vector3 {
+        self.sample_direction(normal, incoming, rng)
+    }
+
+    fn get_eta(&self) -> f64 {
+        1.0
+    }
 
     /// 発光量を返す（デフォルトは発光しない）
     ///
@@ -47,9 +67,7 @@ pub trait Material: Send + Sync {
     }
 }
 
-/// コサイン重み付きサンプリングを使用するLambertianマテリアル
 pub struct LambertianCosineWeighted {
-    /// アルベド（反射率）
     pub albedo: Vector3,
 }
 
@@ -83,7 +101,7 @@ impl Material for LambertianCosineWeighted {
     fn sample_direction(
         &self,
         normal: &Vector3,
-        _incoming: &Vector3,
+        _incoming: &Ray,
         rng: &mut dyn RngCore,
     ) -> Vector3 {
         // コサイン重み付きサンプリング
@@ -140,7 +158,7 @@ impl Material for Emissive {
     fn sample_direction(
         &self,
         normal: &Vector3,
-        _incoming: &Vector3,
+        _incoming: &Ray,
         _rng: &mut dyn RngCore,
     ) -> Vector3 {
         // ダミー
@@ -260,7 +278,7 @@ impl Material for OrenNayar {
     fn sample_direction(
         &self,
         normal: &Vector3,
-        _incoming: &Vector3,
+        _incoming: &Ray,
         rng: &mut dyn RngCore,
     ) -> Vector3 {
         // コサイン重み付きサンプリング（Lambertianと同じ）
@@ -300,8 +318,67 @@ pub struct Mirror {
     pub ior: f64,
 }
 
+impl Mirror {
+    fn get_half_vector(&self, normal: &Vector3, rng: &mut dyn RngCore) -> Vector3 {
+        let r1: f64 = rng.random();
+        let alpha = self.roughness * self.roughness;
+        let alpha2 = alpha * alpha;
+        let phi: f64 = 2.0 * std::f64::consts::PI * r1;
+        let r2: f64 = rng.random();
+        let sin_theta = (alpha2 * r2 / (1.0 - r2 + alpha2 * r2)).sqrt();
+        let cos_theta = (1.0 - sin_theta * sin_theta).sqrt();
+        let x = sin_theta * phi.cos();
+        let y = sin_theta * phi.sin();
+        let z = cos_theta;
+        // ローカル座標系をワールド座標系に変換
+        let up = if normal.y.abs() > 0.999 {
+            Vector3::new(1.0, 0.0, 0.0)
+        } else {
+            Vector3::new(0.0, 1.0, 0.0)
+        };
+        let tangent = up.cross(normal).normalize();
+        let bitangent = normal.cross(&tangent);
+        (tangent * x + bitangent * y + *normal * z).normalize()
+    }
+}
+
 impl Material for Mirror {
     fn brdf_pdf(
+        &self,
+        _x: &Vector3,
+        i: &Vector3,
+        o: &Vector3,
+        normal: &Vector3,
+    ) -> (Vector3, f64, Vector3) {
+        //D(GGX)
+        let alpha = self.roughness * self.roughness;
+        let alpha2 = alpha * alpha;
+        let h = (*i + *o).normalize();
+        let denom = (normal.dot(&h) * normal.dot(&h)) * (alpha2 - 1.0) + 1.0;
+        let d = alpha2 / (std::f64::consts::PI * denom * denom);
+
+        //G
+        let lambda_a =
+            |v: &Vector3| -> f64 { (-1.0 + (1.0 + alpha2 * tan2(*v, *normal)).sqrt()) / 2.0 };
+        let g = 1.0 / (1.0 + lambda_a(i) + lambda_a(o));
+
+        //F
+        let cos_theta = i.dot(&h).max(0.0);
+        // 誘電体のF0をIORから計算: F0 = ((1-ior)/(1+ior))^2
+        let f0_dielectric = ((1.0 - self.ior) / (1.0 + self.ior)).powi(2);
+        let f0_dielectric_vec = Vector3::new(f0_dielectric, f0_dielectric, f0_dielectric);
+        // 金属のF0は色（波長依存の反射率）
+        let f0 = f0_dielectric_vec * (1.0 - self.metallic) + self.color * self.metallic;
+        // Schlick近似でFresnelを計算
+        let f = f0 + (Vector3::new(1.0, 1.0, 1.0) - f0) * (1.0 - cos_theta).powi(5);
+
+        let brdf = d * g * f / (4.0 * normal.dot(i).abs() * normal.dot(o).abs());
+        let pdf = d * normal.dot(&h).abs() / (4.0 * i.dot(&h).abs());
+
+        (brdf, pdf, f0)
+    }
+
+    fn btdf_pdf(
         &self,
         _x: &Vector3,
         i: &Vector3,
@@ -331,52 +408,57 @@ impl Material for Mirror {
         // Schlick近似でFresnelを計算
         let f = f0 + (Vector3::new(1.0, 1.0, 1.0) - f0) * (1.0 - cos_theta).powi(5);
 
-        let brdf = d * g * f / (4.0 * normal.dot(i).abs() * normal.dot(o).abs());
+        let i_h = i.dot(&h).abs();
+        let o_h = o.dot(&h).abs();
+        let i_n = normal.dot(i).abs();
+        let o_n = normal.dot(o).abs();
+        const ETA: f64 = 1.52;
+        let alpha = i_h * o_h / (i_n * o_n);
+
+        let btdf = alpha * (Vector3::one() - f) * g * d / (i.dot(&h) + ETA * o.dot(&h)).powi(2);
+        // let jacobian_denom = eta*
+
         let pdf = d * normal.dot(&h).abs() / (4.0 * i.dot(&h).abs());
 
-        (brdf, pdf, f0)
+
+        (btdf, pdf, f0)
     }
 
-    fn sample_direction(
+    fn sample_direction(&self, normal: &Vector3, incoming: &Ray, rng: &mut dyn RngCore) -> Vector3 {
+        // incomingは表面に向かう方向なので、表面から外向きに変換
+        let half_vector = self.get_half_vector(normal, rng);
+        let i = -incoming.direction;
+        2.0 * i.dot(&half_vector) * half_vector - i
+    }
+
+    fn sample_direction_btdf(
         &self,
         normal: &Vector3,
-        incoming: &Vector3,
+        incoming: &Ray,
         rng: &mut dyn RngCore,
     ) -> Vector3 {
-        let r1: f64 = rng.random();
-        let alpha = self.roughness * self.roughness;
-        let alpha2 = alpha * alpha;
-        let phi: f64 = 2.0 * std::f64::consts::PI * r1;
-        let r2: f64 = rng.random();
-        let sin_theta = (alpha2 * r2 / (1.0 - r2 + alpha2 * r2)).sqrt();
-        let cos_theta = (1.0 - sin_theta * sin_theta).sqrt();
-        let x = sin_theta * phi.cos();
-        let y = sin_theta * phi.sin();
-        let z = cos_theta;
-        // ローカル座標系をワールド座標系に変換
-        let up = if normal.y.abs() > 0.999 {
-            Vector3::new(1.0, 0.0, 0.0)
-        } else {
-            Vector3::new(0.0, 1.0, 0.0)
-        };
-        let tangent = up.cross(normal).normalize();
-        let bitangent = normal.cross(&tangent);
-        let half_vector = (tangent * x + bitangent * y + *normal * z).normalize();
-
         // incomingは表面に向かう方向なので、表面から外向きに変換
-        let i = -*incoming;
-        2.0 * i.dot(&half_vector) * half_vector - i
+        let half_vector = self.get_half_vector(normal, rng);
+        let i = -incoming.direction;
+        let eta = incoming.eta_ratio;
+        let cos_theta_i = normal.dot(&i);
+        let cos_theta_t2 = 1.0 - (eta * eta) * (1.0 - cos_theta_i * cos_theta_i);
+        if cos_theta_t2 < 0.0 {
+            // 全反射
+            return Vector3::zero();
+        }
+        let cos_theta_t = cos_theta_t2.sqrt();
+        eta * -i + (eta * cos_theta_i - cos_theta_t) * half_vector
+    }
+
+    fn get_eta(&self) -> f64 {
+        self.ior
     }
 }
 
-/// PBRマテリアル（GGX鏡面反射 + Oren-Nayar拡散反射の複合）
-/// metallic=0でプラスチック、metallic=1で金属
 pub struct PBRMaterial {
-    /// 鏡面反射層（GGX）
     specular: Mirror,
-    /// 拡散反射層（Oren-Nayar）
     diffuse: OrenNayar,
-    /// 金属度合（0=非金属/プラスチック、1=金属）
     pub metallic: f64,
 }
 
@@ -459,14 +541,9 @@ impl Material for PBRMaterial {
         (brdf, pdf, rr_value)
     }
 
-    fn sample_direction(
-        &self,
-        normal: &Vector3,
-        incoming: &Vector3,
-        rng: &mut dyn RngCore,
-    ) -> Vector3 {
+    fn sample_direction(&self, normal: &Vector3, incoming: &Ray, rng: &mut dyn RngCore) -> Vector3 {
         // 入射方向からFresnelを概算
-        let i = -*incoming;
+        let i = -incoming.direction;
         let cos_theta_i = i.dot(normal).max(0.0);
         let f0_scalar = if self.metallic > 0.5 {
             (self.specular.color.x + self.specular.color.y + self.specular.color.z) / 3.0
