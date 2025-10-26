@@ -128,6 +128,11 @@ impl Vector3 {
     pub fn max(&self) -> f64 {
         self.x.max(self.y).max(self.z)
     }
+
+    // Rec 709
+    pub fn luminance(&self) -> f64 {
+        0.2126 * self.x + 0.7152 * self.y + 0.0722 * self.z
+    }
 }
 
 // Vector3 + Vector3

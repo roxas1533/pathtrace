@@ -15,21 +15,21 @@ pub trait Material: Send + Sync {
     /// * `normal` - 法線ベクトル
     ///
     /// # Returns
-    /// (brdf, pdf, ppr) のタプル
+    /// (brdf, pdf) のタプル
     fn brdf_pdf(
         &self,
         x: &Vector3,
         i: &Vector3,
         o: &Vector3,
         normal: &Vector3,
-    ) -> (Vector3, f64, Vector3);
+    ) -> (Vector3, f64);
     fn btdf_pdf(
         &self,
         x: &Vector3,
         i: &Vector3,
         o: &Vector3,
         normal: &Vector3,
-    ) -> (Vector3, f64, Vector3) {
+    ) -> (Vector3, f64) {
         self.brdf_pdf(x, i, o, normal)
     }
 
@@ -92,10 +92,10 @@ impl Material for LambertianCosineWeighted {
         _i: &Vector3,
         o: &Vector3,
         normal: &Vector3,
-    ) -> (Vector3, f64, Vector3) {
+    ) -> (Vector3, f64) {
         let brdf = self.albedo / std::f64::consts::PI;
         let pdf = self.pdf(normal, o);
-        (brdf, pdf, self.albedo)
+        (brdf, pdf)
     }
 
     fn sample_direction(
@@ -150,9 +150,9 @@ impl Material for Emissive {
         _i: &Vector3,
         _o: &Vector3,
         _normal: &Vector3,
-    ) -> (Vector3, f64, Vector3) {
+    ) -> (Vector3, f64) {
         // 発光マテリアルは光を反射しない（黒体）
-        (Vector3::zero(), 1.0, Vector3::zero())
+        (Vector3::zero(), 1.0)
     }
 
     fn sample_direction(
@@ -232,7 +232,7 @@ impl Material for OrenNayar {
         i: &Vector3,
         o: &Vector3,
         normal: &Vector3,
-    ) -> (Vector3, f64, Vector3) {
+    ) -> (Vector3, f64) {
         // 入射角と出射角（法線からの角度）
         let cos_theta_i = i.dot(normal).max(0.0);
         let cos_theta_o = o.dot(normal).max(0.0);
@@ -272,7 +272,7 @@ impl Material for OrenNayar {
 
         let pdf = self.pdf(normal, o);
 
-        (brdf, pdf, self.albedo)
+        (brdf, pdf)
     }
 
     fn sample_direction(
@@ -349,7 +349,7 @@ impl Material for Mirror {
         i: &Vector3,
         o: &Vector3,
         normal: &Vector3,
-    ) -> (Vector3, f64, Vector3) {
+    ) -> (Vector3, f64) {
         //D(GGX)
         let alpha = self.roughness * self.roughness;
         let alpha2 = alpha * alpha;
@@ -375,7 +375,7 @@ impl Material for Mirror {
         let brdf = d * g * f / (4.0 * normal.dot(i).abs() * normal.dot(o).abs());
         let pdf = d * normal.dot(&h).abs() / (4.0 * i.dot(&h).abs());
 
-        (brdf, pdf, f0)
+        (brdf, pdf)
     }
 
     fn btdf_pdf(
@@ -384,7 +384,7 @@ impl Material for Mirror {
         i: &Vector3,
         o: &Vector3,
         normal: &Vector3,
-    ) -> (Vector3, f64, Vector3) {
+    ) -> (Vector3, f64) {
         //D(GGX)
         let alpha = self.roughness * self.roughness;
         let alpha2 = alpha * alpha;
@@ -421,7 +421,7 @@ impl Material for Mirror {
         let pdf = d * normal.dot(&h).abs() / (4.0 * i.dot(&h).abs());
 
 
-        (btdf, pdf, f0)
+        (btdf, pdf)
     }
 
     fn sample_direction(&self, normal: &Vector3, incoming: &Ray, rng: &mut dyn RngCore) -> Vector3 {
@@ -495,16 +495,22 @@ impl Material for PBRMaterial {
         i: &Vector3,
         o: &Vector3,
         normal: &Vector3,
-    ) -> (Vector3, f64, Vector3) {
+    ) -> (Vector3, f64) {
         // 鏡面反射成分を取得（Mirrorに委譲）
-        let (specular_brdf, specular_pdf, f0) = self.specular.brdf_pdf(x, i, o, normal);
+        let (specular_brdf, specular_pdf) = self.specular.brdf_pdf(x, i, o, normal);
 
         // 拡散反射成分を取得（Oren-Nayarに委譲）
-        let (diffuse_brdf_raw, diffuse_pdf, _) = self.diffuse.brdf_pdf(x, i, o, normal);
+        let (diffuse_brdf_raw, diffuse_pdf) = self.diffuse.brdf_pdf(x, i, o, normal);
 
         // Fresnel係数を計算
         let h = (*i + *o).normalize();
         let cos_theta = i.dot(&h).max(0.0);
+
+        // F0を計算
+        let f0_dielectric = ((1.0 - self.specular.ior) / (1.0 + self.specular.ior)).powi(2);
+        let f0_dielectric_vec = Vector3::new(f0_dielectric, f0_dielectric, f0_dielectric);
+        let f0 = f0_dielectric_vec * (1.0 - self.metallic) + self.specular.color * self.metallic;
+
         let f = self.fresnel(&f0, cos_theta);
 
         // 拡散反射BRDFにエネルギー保存則を適用
@@ -531,14 +537,7 @@ impl Material for PBRMaterial {
             specular_pdf
         };
 
-        // ロシアンルーレット用：金属ならf0、非金属ならベースカラー
-        let rr_value = if self.metallic > 0.5 {
-            f0
-        } else {
-            self.diffuse.albedo
-        };
-
-        (brdf, pdf, rr_value)
+        (brdf, pdf)
     }
 
     fn sample_direction(&self, normal: &Vector3, incoming: &Ray, rng: &mut dyn RngCore) -> Vector3 {

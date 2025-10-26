@@ -38,7 +38,7 @@ impl Object {
         i: &Vector3,
         o: &Vector3,
         normal: &Vector3,
-    ) -> (Vector3, f64, Vector3) {
+    ) -> (Vector3, f64) {
         self.material.brdf_pdf(x, i, o, normal)
     }
 

@@ -11,7 +11,13 @@ const MAX_DEPTH: u32 = 50;
 const NUM_LIGHT_SAMPLES: usize = 1;
 
 pub trait RenderingStrategy {
-    fn ray_color(world: &World, ray: &Ray, depth: u32, rng: &mut impl Rng) -> Vector3;
+    fn ray_color(
+        world: &World,
+        ray: &Ray,
+        depth: u32,
+        rng: &mut impl Rng,
+        throughput: Vector3,
+    ) -> Vector3;
     fn get_eta_from_object(object: &Object, hit: &HitRecord, incoming: &Ray) -> f64;
 }
 
@@ -21,7 +27,13 @@ pub struct MisStrategy;
 
 #[cfg(feature = "mis")]
 impl RenderingStrategy for MisStrategy {
-    fn ray_color(world: &World, ray: &Ray, depth: u32, rng: &mut impl Rng) -> Vector3 {
+    fn ray_color(
+        world: &World,
+        ray: &Ray,
+        depth: u32,
+        rng: &mut impl Rng,
+        throughput: Vector3,
+    ) -> Vector3 {
         if let Some((hit, obj)) = world.hit_scene(ray, 0.001, f64::INFINITY) {
             let emitted = obj.material.emit(&hit.point, &hit.normal);
             if emitted.length() > 0.0 {
@@ -54,7 +66,7 @@ impl RenderingStrategy for MisStrategy {
                         let cos_theta = hit.normal.dot(&light_dir).abs();
 
                         // BRDFを計算
-                        let (brdf, pdf_bsdf, _) =
+                        let (brdf, pdf_bsdf) =
                             obj.brdf_pdf(&hit.point, &(-incoming), &light_dir, &hit.normal);
                         let w_nee = light_sample.pdf / (light_sample.pdf + pdf_bsdf);
 
@@ -69,17 +81,21 @@ impl RenderingStrategy for MisStrategy {
             let scattered_direction = obj.sample_direction(&hit.normal, ray, rng);
             let mut scattered_ray = Ray::new(hit.point, scattered_direction);
             let cos_theta = scattered_direction.dot(&hit.normal).max(0.0);
-            let (brdf, pdf, rr_prob) =
+            let (brdf, pdf) =
                 obj.brdf_pdf(&hit.point, &(-incoming), &scattered_direction, &hit.normal);
-            // ロシアンルーレット
+
+            // 次のパスのthroughputを計算
+            let next_throughput = throughput * brdf * cos_theta / pdf;
+
+            // ロシアンルーレット：累積throughputの輝度を使用
             let rr_prob = if depth < MIN_DEPTH {
                 1.0
             } else if depth >= MAX_DEPTH {
                 // MAX_DEPTHを超えたら確率を急激に下げる
                 let excess_depth = (depth - MAX_DEPTH + 1) as f64;
-                (rr_prob.max() / (2.0_f64.powf(excess_depth))).max(0.01)
+                (next_throughput.luminance() / (2.0_f64.powf(excess_depth))).max(0.01)
             } else {
-                rr_prob.max()
+                next_throughput.luminance().min(1.0)
             };
             if rng.random::<f64>() > rr_prob {
                 return total_radiance;
@@ -110,7 +126,8 @@ impl RenderingStrategy for MisStrategy {
                     // BSDFサンプリングによる再帰
                     // 屈折率の設定
                     scattered_ray.eta_ratio = Self::get_eta_from_object(obj, &hit, ray);
-                    let incoming_light = Self::ray_color(world, &scattered_ray, depth + 1, rng);
+                    let incoming_light =
+                        Self::ray_color(world, &scattered_ray, depth + 1, rng, next_throughput);
                     total_radiance += brdf * incoming_light * cos_theta / (pdf * rr_prob);
                 }
             }

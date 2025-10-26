@@ -307,7 +307,7 @@ impl World {
             }
             #[cfg(feature = "mis")]
             {
-                color_temp += MisStrategy::ray_color(self, &ray, 0, rng);
+                color_temp += MisStrategy::ray_color(self, &ray, 0, rng, Vector3::one());
             }
         }
 
