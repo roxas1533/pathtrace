@@ -18,6 +18,10 @@ impl Ray {
     pub fn at(&self, t: f64) -> Vector3 {
         self.origin + self.direction * t
     }
+
+    pub fn set_eta_ratio(&mut self, eta_ratio: f64) {
+        self.eta_ratio = eta_ratio;
+    }
 }
 
 pub struct Camera {

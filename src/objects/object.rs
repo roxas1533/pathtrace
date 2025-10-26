@@ -35,11 +35,22 @@ impl Object {
     pub fn brdf_pdf(
         &self,
         x: &Vector3,
-        i: &Vector3,
+        ray: &Ray,
         o: &Vector3,
         normal: &Vector3,
     ) -> (Vector3, f64) {
-        self.material.brdf_pdf(x, i, o, normal)
+        self.material.brdf_pdf(x, ray, o, normal)
+    }
+
+    /// BSDFとPDFを同時に取得
+    pub fn bsdf_pdf(
+        &self,
+        x: &Vector3,
+        ray: &Ray,
+        o: &Vector3,
+        normal: &Vector3,
+    ) -> (Vector3, f64) {
+        self.material.bsdf_pdf(x, ray, o, normal)
     }
 
     /// サンプリング方向を生成（ジェネリック版）

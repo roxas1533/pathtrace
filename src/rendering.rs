@@ -13,7 +13,7 @@ const NUM_LIGHT_SAMPLES: usize = 1;
 pub trait RenderingStrategy {
     fn ray_color(
         world: &World,
-        ray: &Ray,
+        ray: &mut Ray,
         depth: u32,
         rng: &mut impl Rng,
         throughput: Vector3,
@@ -29,7 +29,7 @@ pub struct MisStrategy;
 impl RenderingStrategy for MisStrategy {
     fn ray_color(
         world: &World,
-        ray: &Ray,
+        ray: &mut Ray,
         depth: u32,
         rng: &mut impl Rng,
         throughput: Vector3,
@@ -45,8 +45,6 @@ impl RenderingStrategy for MisStrategy {
             }
 
             let mut total_radiance = Vector3::zero();
-
-            let incoming = ray.direction;
 
             let mut direct_light = Vector3::zero();
             // NEE
@@ -65,13 +63,13 @@ impl RenderingStrategy for MisStrategy {
                     if is_visible {
                         let cos_theta = hit.normal.dot(&light_dir).abs();
 
-                        // BRDFを計算
-                        let (brdf, pdf_bsdf) =
-                            obj.brdf_pdf(&hit.point, &(-incoming), &light_dir, &hit.normal);
+                        // BSDFを計算
+                        let (bsdf, pdf_bsdf) =
+                            obj.bsdf_pdf(&hit.point, ray, &light_dir, &hit.normal);
                         let w_nee = light_sample.pdf / (light_sample.pdf + pdf_bsdf);
 
                         direct_light +=
-                            w_nee * brdf * light_sample.emission * cos_theta / light_sample.pdf;
+                            w_nee * bsdf * light_sample.emission * cos_theta / light_sample.pdf;
                     }
                 }
             }
@@ -81,11 +79,12 @@ impl RenderingStrategy for MisStrategy {
             let scattered_direction = obj.sample_direction(&hit.normal, ray, rng);
             let mut scattered_ray = Ray::new(hit.point, scattered_direction);
             let cos_theta = scattered_direction.dot(&hit.normal).max(0.0);
-            let (brdf, pdf) =
-                obj.brdf_pdf(&hit.point, &(-incoming), &scattered_direction, &hit.normal);
+            // 屈折率の設定
+            ray.set_eta_ratio(Self::get_eta_from_object(obj, &hit, ray));
+            let (bsdf, pdf) =
+                obj.bsdf_pdf(&hit.point, ray, &scattered_direction, &hit.normal);
 
-            // 次のパスのthroughputを計算
-            let next_throughput = throughput * brdf * cos_theta / pdf;
+            let next_throughput = throughput * bsdf * cos_theta / pdf;
 
             // ロシアンルーレット：累積throughputの輝度を使用
             let rr_prob = if depth < MIN_DEPTH {
@@ -116,7 +115,7 @@ impl RenderingStrategy for MisStrategy {
                         .sample_surface_from_point(&hit, Some(&scattered_hit), rng);
                     let w_bsdf = pdf / (pdf + pdf_shape);
                     total_radiance += w_bsdf
-                        * brdf
+                        * bsdf
                         * obj
                             .material
                             .emit(&scattered_hit.point, &scattered_hit.normal)
@@ -124,11 +123,9 @@ impl RenderingStrategy for MisStrategy {
                         / (pdf * rr_prob);
                 } else {
                     // BSDFサンプリングによる再帰
-                    // 屈折率の設定
-                    scattered_ray.eta_ratio = Self::get_eta_from_object(obj, &hit, ray);
                     let incoming_light =
-                        Self::ray_color(world, &scattered_ray, depth + 1, rng, next_throughput);
-                    total_radiance += brdf * incoming_light * cos_theta / (pdf * rr_prob);
+                        Self::ray_color(world, &mut scattered_ray, depth + 1, rng, next_throughput);
+                    total_radiance += bsdf * incoming_light * cos_theta / (pdf * rr_prob);
                 }
             }
 
@@ -141,6 +138,7 @@ impl RenderingStrategy for MisStrategy {
 
     fn get_eta_from_object(object: &Object, hit: &HitRecord, incoming: &Ray) -> f64 {
         let cos_theta_i = hit.normal.dot(&(-incoming.direction)).clamp(-1.0, 1.0);
+        // cos_theta_i > 0 の場合、物体の内側から外側へ出る方向
         match cos_theta_i > 0.0 {
             true => object.material.get_eta(),
             false => 1.0 / object.material.get_eta(),

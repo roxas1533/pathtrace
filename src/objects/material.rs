@@ -10,27 +10,25 @@ pub trait Material: Send + Sync {
     ///
     /// # Arguments
     /// * `x` - 交差点の位置
-    /// * `i` - 入射方向（カメラ方向）
+    /// * `ray` - 入射レイ
     /// * `o` - 出射方向（サンプリングされた方向）
     /// * `normal` - 法線ベクトル
     ///
     /// # Returns
     /// (brdf, pdf) のタプル
-    fn brdf_pdf(
-        &self,
-        x: &Vector3,
-        i: &Vector3,
-        o: &Vector3,
-        normal: &Vector3,
-    ) -> (Vector3, f64);
-    fn btdf_pdf(
-        &self,
-        x: &Vector3,
-        i: &Vector3,
-        o: &Vector3,
-        normal: &Vector3,
-    ) -> (Vector3, f64) {
-        self.brdf_pdf(x, i, o, normal)
+    fn brdf_pdf(&self, x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64);
+
+    /// BSDFとPDFを同時に計算（BRDF + BTDF）
+    ///
+    /// # Returns
+    /// (bsdf, pdf) のタプル
+    fn bsdf_pdf(&self, x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+        // デフォルトではBRDFのみを返す
+        self.brdf_pdf(x, ray, o, normal)
+    }
+
+    fn btdf_pdf(&self, x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+        self.brdf_pdf(x, ray, o, normal)
     }
 
     /// サンプリング方向を生成
@@ -86,13 +84,7 @@ impl LambertianCosineWeighted {
 }
 
 impl Material for LambertianCosineWeighted {
-    fn brdf_pdf(
-        &self,
-        _x: &Vector3,
-        _i: &Vector3,
-        o: &Vector3,
-        normal: &Vector3,
-    ) -> (Vector3, f64) {
+    fn brdf_pdf(&self, _x: &Vector3, _ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
         let brdf = self.albedo / std::f64::consts::PI;
         let pdf = self.pdf(normal, o);
         (brdf, pdf)
@@ -147,7 +139,7 @@ impl Material for Emissive {
     fn brdf_pdf(
         &self,
         _x: &Vector3,
-        _i: &Vector3,
+        _ray: &Ray,
         _o: &Vector3,
         _normal: &Vector3,
     ) -> (Vector3, f64) {
@@ -226,13 +218,9 @@ impl OrenNayar {
 }
 
 impl Material for OrenNayar {
-    fn brdf_pdf(
-        &self,
-        _x: &Vector3,
-        i: &Vector3,
-        o: &Vector3,
-        normal: &Vector3,
-    ) -> (Vector3, f64) {
+    fn brdf_pdf(&self, _x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+        let i = -ray.direction;
+
         // 入射角と出射角（法線からの角度）
         let cos_theta_i = i.dot(normal).max(0.0);
         let cos_theta_o = o.dot(normal).max(0.0);
@@ -243,7 +231,7 @@ impl Material for OrenNayar {
 
         // 方位角の差を計算
         let tangent = self.compute_tangent(normal);
-        let phi_i = self.compute_azimuth(i, normal, &tangent);
+        let phi_i = self.compute_azimuth(&i, normal, &tangent);
         let phi_o = self.compute_azimuth(o, normal, &tangent);
         let cos_phi_diff = (phi_i - phi_o).cos().max(0.0);
 
@@ -343,24 +331,20 @@ impl Mirror {
 }
 
 impl Material for Mirror {
-    fn brdf_pdf(
-        &self,
-        _x: &Vector3,
-        i: &Vector3,
-        o: &Vector3,
-        normal: &Vector3,
-    ) -> (Vector3, f64) {
+    fn brdf_pdf(&self, _x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+        let i = -ray.direction;
+
         //D(GGX)
         let alpha = self.roughness * self.roughness;
         let alpha2 = alpha * alpha;
-        let h = (*i + *o).normalize();
+        let h = (i + *o).normalize();
         let denom = (normal.dot(&h) * normal.dot(&h)) * (alpha2 - 1.0) + 1.0;
         let d = alpha2 / (std::f64::consts::PI * denom * denom);
 
         //G
         let lambda_a =
             |v: &Vector3| -> f64 { (-1.0 + (1.0 + alpha2 * tan2(*v, *normal)).sqrt()) / 2.0 };
-        let g = 1.0 / (1.0 + lambda_a(i) + lambda_a(o));
+        let g = 1.0 / (1.0 + lambda_a(&i) + lambda_a(o));
 
         //F
         let cos_theta = i.dot(&h).max(0.0);
@@ -372,54 +356,53 @@ impl Material for Mirror {
         // Schlick近似でFresnelを計算
         let f = f0 + (Vector3::new(1.0, 1.0, 1.0) - f0) * (1.0 - cos_theta).powi(5);
 
-        let brdf = d * g * f / (4.0 * normal.dot(i).abs() * normal.dot(o).abs());
+        let brdf = d * g * f / (4.0 * normal.dot(&i).abs() * normal.dot(o).abs());
         let pdf = d * normal.dot(&h).abs() / (4.0 * i.dot(&h).abs());
 
         (brdf, pdf)
     }
 
-    fn btdf_pdf(
-        &self,
-        _x: &Vector3,
-        i: &Vector3,
-        o: &Vector3,
-        normal: &Vector3,
-    ) -> (Vector3, f64) {
+    fn btdf_pdf(&self, _x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+        let i = -ray.direction;
+        let eta = ray.eta_ratio; // η_i / η_t
+
+        let h = -(i * eta + *o).normalize();
+
         //D(GGX)
         let alpha = self.roughness * self.roughness;
         let alpha2 = alpha * alpha;
-        let h = (*i + *o).normalize();
-        let denom = (normal.dot(&h) * normal.dot(&h)) * (alpha2 - 1.0) + 1.0;
+        let n_dot_h = normal.dot(&h);
+        let denom = (n_dot_h * n_dot_h) * (alpha2 - 1.0) + 1.0;
         let d = alpha2 / (std::f64::consts::PI * denom * denom);
 
         //G
         let lambda_a =
             |v: &Vector3| -> f64 { (-1.0 + (1.0 + alpha2 * tan2(*v, *normal)).sqrt()) / 2.0 };
-        let g = 1.0 / (1.0 + lambda_a(i) + lambda_a(o));
+        let g = 1.0 / (1.0 + lambda_a(&i) + lambda_a(o));
 
         //F
-        let cos_theta = i.dot(&h).max(0.0);
-        // 誘電体のF0をIORから計算: F0 = ((1-ior)/(1+ior))^2
-        // let f0_dielectric = ((1.0 - self.ior) / (1.0 + self.ior)).powi(2);
-        let f0_dielectric = 0.16 * self.ior * self.ior;
+        let i_dot_h = i.dot(&h);
+        let o_dot_h = o.dot(&h);
+        let cos_theta = i_dot_h.abs();
+
+        // 誘電体のF0をIORから計算
+        let f0_dielectric = ((1.0 - self.ior) / (1.0 + self.ior)).powi(2);
         let f0_dielectric_vec = Vector3::new(f0_dielectric, f0_dielectric, f0_dielectric);
         // 金属のF0は色（波長依存の反射率）
         let f0 = f0_dielectric_vec * (1.0 - self.metallic) + self.color * self.metallic;
         // Schlick近似でFresnelを計算
         let f = f0 + (Vector3::new(1.0, 1.0, 1.0) - f0) * (1.0 - cos_theta).powi(5);
 
-        let i_h = i.dot(&h).abs();
-        let o_h = o.dot(&h).abs();
-        let i_n = normal.dot(i).abs();
+        let i_n = normal.dot(&i).abs();
         let o_n = normal.dot(o).abs();
-        const ETA: f64 = 1.52;
-        let alpha = i_h * o_h / (i_n * o_n);
 
-        let btdf = alpha * (Vector3::one() - f) * g * d / (i.dot(&h) + ETA * o.dot(&h)).powi(2);
-        // let jacobian_denom = eta*
+        let denom_term = eta * i_dot_h + o_dot_h;
+        let btdf = (Vector3::one() - f) * d * g * i_dot_h.abs() * o_dot_h.abs()
+            / (i_n * o_n * denom_term * denom_term);
 
-        let pdf = d * normal.dot(&h).abs() / (4.0 * i.dot(&h).abs());
+        let jacobian = o_dot_h.abs() / (eta * eta * denom_term * denom_term);
 
+        let pdf = d * n_dot_h.abs() * jacobian;
 
         (btdf, pdf)
     }
@@ -489,21 +472,17 @@ impl PBRMaterial {
 }
 
 impl Material for PBRMaterial {
-    fn brdf_pdf(
-        &self,
-        x: &Vector3,
-        i: &Vector3,
-        o: &Vector3,
-        normal: &Vector3,
-    ) -> (Vector3, f64) {
+    fn brdf_pdf(&self, x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+        let i = -ray.direction;
+
         // 鏡面反射成分を取得（Mirrorに委譲）
-        let (specular_brdf, specular_pdf) = self.specular.brdf_pdf(x, i, o, normal);
+        let (specular_brdf, specular_pdf) = self.specular.brdf_pdf(x, ray, o, normal);
 
         // 拡散反射成分を取得（Oren-Nayarに委譲）
-        let (diffuse_brdf_raw, diffuse_pdf) = self.diffuse.brdf_pdf(x, i, o, normal);
+        let (diffuse_brdf_raw, diffuse_pdf) = self.diffuse.brdf_pdf(x, ray, o, normal);
 
         // Fresnel係数を計算
-        let h = (*i + *o).normalize();
+        let h = (i + *o).normalize();
         let cos_theta = i.dot(&h).max(0.0);
 
         // F0を計算

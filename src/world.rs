@@ -293,7 +293,7 @@ impl World {
         let mut color_temp = Vector3::new(0.0, 0.0, 0.0);
 
         for _ in 0..SAMPLE_NUM {
-            let ray =
+            let mut ray =
                 self.camera
                     .get_ray_with_offset(x, HEIGHT - 1 - y, rng.random(), rng.random());
 
@@ -307,7 +307,7 @@ impl World {
             }
             #[cfg(feature = "mis")]
             {
-                color_temp += MisStrategy::ray_color(self, &ray, 0, rng, Vector3::one());
+                color_temp += MisStrategy::ray_color(self, &mut ray, 0, rng, Vector3::one());
             }
         }
 
