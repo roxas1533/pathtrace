@@ -4,9 +4,9 @@ use crate::{
 };
 use rand::{Rng, RngCore};
 
-/// マテリアルを表すtrait（BRDF、サンプリング、PDFを担当）
+/// マテリアルを表すtrait（BSDF、サンプリング、PDFを担当）
 pub trait Material: Send + Sync {
-    /// BRDFとPDFを同時に計算（効率的）
+    /// BSDFとPDFを同時に計算（BRDF + BTDF）
     ///
     /// # Arguments
     /// * `x` - 交差点の位置
@@ -15,20 +15,29 @@ pub trait Material: Send + Sync {
     /// * `normal` - 法線ベクトル
     ///
     /// # Returns
-    /// (brdf, pdf) のタプル
-    fn brdf_pdf(&self, x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64);
+    /// (bsdf, pdf) のタプル
+    fn bsdf_pdf(&self, x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64);
 
-    /// BSDFとPDFを同時に計算（BRDF + BTDF）
+    /// サンプリング方向を生成し、BSDFとPDFを同時に取得
+    ///
+    /// # Arguments
+    /// * `x` - 交差点の位置
+    /// * `ray` - 入射レイ
+    /// * `normal` - 法線ベクトル
+    /// * `rng` - 乱数生成器
     ///
     /// # Returns
-    /// (bsdf, pdf) のタプル
-    fn bsdf_pdf(&self, x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
-        // デフォルトではBRDFのみを返す
-        self.brdf_pdf(x, ray, o, normal)
-    }
-
-    fn btdf_pdf(&self, x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
-        self.brdf_pdf(x, ray, o, normal)
+    /// (sampled_direction, bsdf, pdf) のタプル
+    fn bsdf_pdf_sample(
+        &self,
+        x: &Vector3,
+        ray: &Ray,
+        normal: &Vector3,
+        rng: &mut dyn RngCore,
+    ) -> (Vector3, Vector3, f64) {
+        let sampled_direction = self.sample_direction(normal, ray, rng);
+        let (bsdf, pdf) = self.bsdf_pdf(x, ray, &sampled_direction, normal);
+        (sampled_direction, bsdf, pdf)
     }
 
     /// サンプリング方向を生成
@@ -38,15 +47,6 @@ pub trait Material: Send + Sync {
     /// * `incoming` - 入射方向（カメラから来る方向）
     /// * `rng` - 乱数生成器
     fn sample_direction(&self, normal: &Vector3, incoming: &Ray, rng: &mut dyn RngCore) -> Vector3;
-
-    fn sample_direction_btdf(
-        &self,
-        normal: &Vector3,
-        incoming: &Ray,
-        rng: &mut dyn RngCore,
-    ) -> Vector3 {
-        self.sample_direction(normal, incoming, rng)
-    }
 
     fn get_eta(&self) -> f64 {
         1.0
@@ -84,7 +84,8 @@ impl LambertianCosineWeighted {
 }
 
 impl Material for LambertianCosineWeighted {
-    fn brdf_pdf(&self, _x: &Vector3, _ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+    fn bsdf_pdf(&self, _x: &Vector3, _ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+        // 拡散反射BRDFを計算
         let brdf = self.albedo / std::f64::consts::PI;
         let pdf = self.pdf(normal, o);
         (brdf, pdf)
@@ -136,7 +137,7 @@ impl Emissive {
 }
 
 impl Material for Emissive {
-    fn brdf_pdf(
+    fn bsdf_pdf(
         &self,
         _x: &Vector3,
         _ray: &Ray,
@@ -218,9 +219,10 @@ impl OrenNayar {
 }
 
 impl Material for OrenNayar {
-    fn brdf_pdf(&self, _x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+    fn bsdf_pdf(&self, _x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
         let i = -ray.direction;
 
+        // Oren-Nayar BRDFを計算
         // 入射角と出射角（法線からの角度）
         let cos_theta_i = i.dot(normal).max(0.0);
         let cos_theta_o = o.dot(normal).max(0.0);
@@ -328,10 +330,8 @@ impl Mirror {
         let bitangent = normal.cross(&tangent);
         (tangent * x + bitangent * y + *normal * z).normalize()
     }
-}
 
-impl Material for Mirror {
-    fn brdf_pdf(&self, _x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+    fn brdf(&self, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
         let i = -ray.direction;
 
         //D(GGX)
@@ -362,7 +362,7 @@ impl Material for Mirror {
         (brdf, pdf)
     }
 
-    fn btdf_pdf(&self, _x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+    fn btdf(&self, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
         let i = -ray.direction;
         let eta = ray.eta_ratio; // η_i / η_t
 
@@ -406,14 +406,6 @@ impl Material for Mirror {
 
         (btdf, pdf)
     }
-
-    fn sample_direction(&self, normal: &Vector3, incoming: &Ray, rng: &mut dyn RngCore) -> Vector3 {
-        // incomingは表面に向かう方向なので、表面から外向きに変換
-        let half_vector = self.get_half_vector(normal, rng);
-        let i = -incoming.direction;
-        2.0 * i.dot(&half_vector) * half_vector - i
-    }
-
     fn sample_direction_btdf(
         &self,
         normal: &Vector3,
@@ -432,6 +424,102 @@ impl Material for Mirror {
         }
         let cos_theta_t = cos_theta_t2.sqrt();
         eta * -i + (eta * cos_theta_i - cos_theta_t) * half_vector
+    }
+}
+
+impl Material for Mirror {
+    fn bsdf_pdf(&self, _x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+        // 入射と出射が法線に対して同じ側にあるかチェック（反射 vs 透過）
+        let i = -ray.direction;
+        let i_dot_n = i.dot(normal);
+        let o_dot_n = o.dot(normal);
+
+        if i_dot_n * o_dot_n > 0.0 {
+            // 反射（BRDF）
+            self.brdf(ray, o, normal)
+        } else {
+            // 透過（BTDF）
+            self.btdf(ray, o, normal)
+        }
+    }
+
+    fn bsdf_pdf_sample(
+        &self,
+        x: &Vector3,
+        ray: &Ray,
+        normal: &Vector3,
+        rng: &mut dyn RngCore,
+    ) -> (Vector3, Vector3, f64) {
+        let i = -ray.direction; // 表面から外向きの方向
+        let i_dot_n = i.dot(normal);
+
+        if i_dot_n.abs() < 1e-6 {
+            // デジェネレートケース
+            return (Vector3::zero(), Vector3::zero(), 1.0);
+        }
+
+        // まずFresnelを評価して反射/透過を決定
+        let cos_theta_i = i_dot_n.abs();
+        let f0 = ((1.0 - self.ior) / (1.0 + self.ior)).powi(2);
+        let fresnel = f0 + (1.0 - f0) * (1.0 - cos_theta_i).powi(5);
+
+        // 透過可能かチェック
+        let eta = ray.eta_ratio;
+        let sin2_theta_i = 1.0 - cos_theta_i * cos_theta_i;
+        let sin2_theta_t = eta * eta * sin2_theta_i;
+        let can_refract = sin2_theta_t < 1.0;
+
+        // ロシアンルーレットで反射/透過を選択
+        let is_reflect = rng.random::<f64>() < fresnel || !can_refract;
+
+        if is_reflect {
+            // 反射の場合：反射用のhalf vectorをサンプリング
+            let half_vector = self.get_half_vector(normal, rng);
+            let i_h = i.dot(&half_vector).abs();
+
+            if i_h < 1e-6 {
+                return (Vector3::zero(), Vector3::zero(), 1.0);
+            }
+
+            let o_reflect = 2.0 * i.dot(&half_vector) * half_vector - i;
+            let (bsdf, pdf) = self.brdf(ray, &o_reflect, normal);
+            (o_reflect, bsdf, pdf)
+        } else {
+            // 透過の場合：透過用のhalf vectorをサンプリング
+            let half_vector = self.get_half_vector(normal, rng);
+            let i_h = i.dot(&half_vector);
+
+            if i_h.abs() < 1e-6 {
+                return (Vector3::zero(), Vector3::zero(), 1.0);
+            }
+
+            // half vectorから透過方向を計算
+            // h = -(eta_i * i + eta_t * o) / |...|
+            // => o = -(h * |...| + eta_i * i) / eta_t
+            // より簡単な形式: o = eta * (-i) + (eta * (i·h) - sqrt(...)) * h
+            let eta_ih = eta * i_h;
+            let k = 1.0 - eta * eta * (1.0 - i_h * i_h);
+
+            let o_refract = if k >= 0.0 {
+                eta * (-i) + (eta_ih - k.sqrt()) * half_vector
+            } else {
+                // 全反射の場合は反射方向に戻す
+                2.0 * i.dot(&half_vector) * half_vector - i
+            };
+
+            let (bsdf, pdf) = self.btdf(ray, &o_refract, normal);
+            (o_refract, bsdf, pdf)
+        }
+    }
+
+    fn sample_direction(
+        &self,
+        normal: &Vector3,
+        _incoming: &Ray,
+        _rng: &mut dyn RngCore,
+    ) -> Vector3 {
+        // このメソッドはもう使われないが、traitで必須なのでダミー実装
+        *normal
     }
 
     fn get_eta(&self) -> f64 {
@@ -472,14 +560,14 @@ impl PBRMaterial {
 }
 
 impl Material for PBRMaterial {
-    fn brdf_pdf(&self, x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
+    fn bsdf_pdf(&self, x: &Vector3, ray: &Ray, o: &Vector3, normal: &Vector3) -> (Vector3, f64) {
         let i = -ray.direction;
 
-        // 鏡面反射成分を取得（Mirrorに委譲）
-        let (specular_brdf, specular_pdf) = self.specular.brdf_pdf(x, ray, o, normal);
+        // 鏡面反射成分を取得（MirrorのBRDFに委譲）
+        let (specular_brdf, specular_pdf) = self.specular.brdf(ray, o, normal);
 
-        // 拡散反射成分を取得（Oren-Nayarに委譲）
-        let (diffuse_brdf_raw, diffuse_pdf) = self.diffuse.brdf_pdf(x, ray, o, normal);
+        // 拡散反射成分を取得（Oren-NayarのBSDFに委譲）
+        let (diffuse_brdf_raw, diffuse_pdf) = self.diffuse.bsdf_pdf(x, ray, o, normal);
 
         // Fresnel係数を計算
         let h = (i + *o).normalize();

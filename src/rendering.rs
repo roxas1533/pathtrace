@@ -76,13 +76,11 @@ impl RenderingStrategy for MisStrategy {
             // 平均を取る
             total_radiance += direct_light / NUM_LIGHT_SAMPLES as f64;
 
-            let scattered_direction = obj.sample_direction(&hit.normal, ray, rng);
-            let mut scattered_ray = Ray::new(hit.point, scattered_direction);
-            let cos_theta = scattered_direction.dot(&hit.normal).max(0.0);
-            // 屈折率の設定
             ray.set_eta_ratio(Self::get_eta_from_object(obj, &hit, ray));
-            let (bsdf, pdf) =
-                obj.bsdf_pdf(&hit.point, ray, &scattered_direction, &hit.normal);
+            let (scattered_direction, bsdf, pdf) = obj.bsdf_pdf_sample(&hit.point, ray, &hit.normal, rng);
+            let mut scattered_ray = Ray::new(hit.point, scattered_direction);
+            scattered_ray.set_eta_ratio(Self::get_eta_from_object(obj, &hit, &scattered_ray));
+            let cos_theta = scattered_direction.dot(&hit.normal).abs();
 
             let next_throughput = throughput * bsdf * cos_theta / pdf;
 
@@ -192,11 +190,10 @@ impl RenderingStrategy for NeeStrategy {
                 }
             }
 
-            let scattered_direction = obj.sample_direction(&hit.normal, &incoming, rng);
+            let incoming_ray = Ray::new(hit.point, -incoming);
+            let (scattered_direction, brdf, pdf) = obj.bsdf_pdf_sample(&hit.point, &incoming_ray, &hit.normal, rng);
             let scattered_ray = Ray::new(hit.point, scattered_direction);
             let cos_theta = scattered_direction.dot(&hit.normal).max(0.0);
-            let (brdf, pdf) =
-                obj.brdf_pdf(&hit.point, &(-incoming), &scattered_direction, &hit.normal);
 
             let incoming_light = Self::ray_color(world, &scattered_ray, depth - 1, false, rng);
             total_radiance += brdf * incoming_light * cos_theta / pdf;
@@ -228,16 +225,13 @@ impl RenderingStrategy for BrdfOnlyStrategy {
             // 入射方向（レイの方向）
             let incoming = ray.direction;
 
-            // オブジェクトのサンプリング戦略を使って方向を生成
-            let scattered_direction = obj.sample_direction(&hit.normal, &incoming, rng);
+            // オブジェクトのサンプリング戦略を使って方向を生成し、BSDFとPDFを同時に取得
+            let incoming_ray = Ray::new(hit.point, -incoming);
+            let (scattered_direction, brdf, pdf) = obj.bsdf_pdf_sample(&hit.point, &incoming_ray, &hit.normal, rng);
             let scattered_ray = Ray::new(hit.point, scattered_direction);
 
             // コサイン項（入射角度による減衰）
             let cos_theta = scattered_direction.dot(&hit.normal).max(0.0);
-
-            // BRDFとPDFを同時に取得（効率的）
-            let (brdf, pdf) =
-                obj.brdf_pdf(&hit.point, &(-incoming), &scattered_direction, &hit.normal);
 
             // 入射輝度を再帰的に計算
             let incoming_light = Self::ray_color(world, &scattered_ray, depth - 1, false, rng);

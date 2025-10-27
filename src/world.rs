@@ -1,8 +1,8 @@
 use crate::camera::{Camera, Ray};
 use crate::math::Vector3;
-use crate::objects::material::{LambertianCosineWeighted, PBRMaterial};
+use crate::objects::material::{LambertianCosineWeighted, Mirror, PBRMaterial};
 use crate::objects::shape::TriangleShape;
-use crate::objects::{Emissive, HitRecord, Hittable, Mirror, Object, SphereShape};
+use crate::objects::{Emissive, HitRecord, Hittable, Object, SphereShape};
 #[cfg(feature = "brdf_only")]
 use crate::rendering::BrdfOnlyStrategy;
 #[cfg(feature = "mis")]
@@ -13,9 +13,9 @@ use crate::rendering::RenderingStrategy;
 use rand::Rng;
 use std::sync::Mutex;
 
-pub const WIDTH: u32 = 400;
-pub const HEIGHT: u32 = 400;
-pub const SAMPLE_NUM: u32 = 2000; // 1ピクセルあたりのサンプル数
+pub const WIDTH: u32 = 300;
+pub const HEIGHT: u32 = 200;
+pub const SAMPLE_NUM: u32 = 500;
 
 #[derive(Clone, Copy)]
 pub struct Color {
@@ -186,16 +186,17 @@ impl World {
             //     )),
             //     Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
             // ),
-            // 中央の球体（テスト用）
-            // Object::new(
-            //     Box::new(SphereShape::new(Vector3::new(-0.4, -0.5, box_depth), 0.4)),
-            //     Box::new(Mirror {
-            //         roughness: 0.05,
-            //         color: Vector3::new(0.1, 0.1, 0.1),
-            //         metallic: 0.0,
-            //         ior: 0.35,
-            //     }),
-            // ),
+            // ガラス球（左側）
+            Object::new(
+                Box::new(SphereShape::new(Vector3::new(-0.4, -0.5, box_depth), 0.4)),
+                Box::new(Mirror {
+                    roughness: 0.01,
+                    color: Vector3::new(1.0, 1.0, 1.0),
+                    metallic: 0.0,
+                    ior: 1.5,
+                }),
+            ),
+            // PBR球（右側）
             Object::new(
                 Box::new(SphereShape::new(Vector3::new(0.4, -0.5, box_depth), 0.4)),
                 Box::new(PBRMaterial::new(

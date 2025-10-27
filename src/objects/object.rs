@@ -31,17 +31,6 @@ impl Hittable for Object {
 }
 
 impl Object {
-    /// BRDFとPDFを同時に取得
-    pub fn brdf_pdf(
-        &self,
-        x: &Vector3,
-        ray: &Ray,
-        o: &Vector3,
-        normal: &Vector3,
-    ) -> (Vector3, f64) {
-        self.material.brdf_pdf(x, ray, o, normal)
-    }
-
     /// BSDFとPDFを同時に取得
     pub fn bsdf_pdf(
         &self,
@@ -53,13 +42,14 @@ impl Object {
         self.material.bsdf_pdf(x, ray, o, normal)
     }
 
-    /// サンプリング方向を生成（ジェネリック版）
-    pub fn sample_direction<R: rand::Rng>(
+    /// サンプリング方向を生成し、BSDFとPDFを同時に取得
+    pub fn bsdf_pdf_sample<R: rand::Rng>(
         &self,
+        x: &Vector3,
+        ray: &Ray,
         normal: &Vector3,
-        incoming: &Ray,
         rng: &mut R,
-    ) -> Vector3 {
-        self.material.sample_direction(normal, incoming, rng)
+    ) -> (Vector3, Vector3, f64) {
+        self.material.bsdf_pdf_sample(x, ray, normal, rng)
     }
 }
