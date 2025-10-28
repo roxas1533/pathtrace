@@ -1,6 +1,5 @@
 use crate::camera::Ray;
 use crate::math::Vector3;
-#[cfg(feature = "mis")]
 use crate::objects::{HitRecord, Object};
 use crate::world::World;
 use rand::Rng;
@@ -77,10 +76,10 @@ impl RenderingStrategy for MisStrategy {
             total_radiance += direct_light / NUM_LIGHT_SAMPLES as f64;
 
             ray.set_eta_ratio(Self::get_eta_from_object(obj, &hit, ray));
-            let (scattered_direction, bsdf, pdf) = obj.bsdf_pdf_sample(&hit.point, ray, &hit.normal, rng);
+            let (scattered_direction, bsdf, pdf, cos_theta) =
+                obj.bsdf_pdf_sample(&hit.point, ray, &hit.normal, rng);
             let mut scattered_ray = Ray::new(hit.point, scattered_direction);
             scattered_ray.set_eta_ratio(Self::get_eta_from_object(obj, &hit, &scattered_ray));
-            let cos_theta = scattered_direction.dot(&hit.normal).abs();
 
             let next_throughput = throughput * bsdf * cos_theta / pdf;
 
@@ -136,10 +135,11 @@ impl RenderingStrategy for MisStrategy {
 
     fn get_eta_from_object(object: &Object, hit: &HitRecord, incoming: &Ray) -> f64 {
         let cos_theta_i = hit.normal.dot(&(-incoming.direction)).clamp(-1.0, 1.0);
-        // cos_theta_i > 0 の場合、物体の内側から外側へ出る方向
+        // cos_theta_i > 0: レイが外から来る (空気→ガラス) → eta = n_air/n_glass
+        // cos_theta_i < 0: レイが内から来る (ガラス→空気) → eta = n_glass/n_air
         match cos_theta_i > 0.0 {
-            true => object.material.get_eta(),
-            false => 1.0 / object.material.get_eta(),
+            true => 1.0 / object.material.get_eta(),
+            false => object.material.get_eta(),
         }
     }
 }
@@ -191,7 +191,8 @@ impl RenderingStrategy for NeeStrategy {
             }
 
             let incoming_ray = Ray::new(hit.point, -incoming);
-            let (scattered_direction, brdf, pdf) = obj.bsdf_pdf_sample(&hit.point, &incoming_ray, &hit.normal, rng);
+            let (scattered_direction, brdf, pdf) =
+                obj.bsdf_pdf_sample(&hit.point, &incoming_ray, &hit.normal, rng);
             let scattered_ray = Ray::new(hit.point, scattered_direction);
             let cos_theta = scattered_direction.dot(&hit.normal).max(0.0);
 
@@ -212,35 +213,63 @@ pub struct BrdfOnlyStrategy;
 
 #[cfg(feature = "brdf_only")]
 impl RenderingStrategy for BrdfOnlyStrategy {
-    fn ray_color(world: &World, ray: &Ray, depth: u32, rng: &mut impl Rng) -> Vector3 {
-        // 最大再帰深度に達したら黒を返す
-        if depth == 0 {
-            return Vector3::zero();
-        }
-
+    fn ray_color(
+        world: &World,
+        ray: &mut Ray,
+        depth: u32,
+        rng: &mut impl Rng,
+        throughput: Vector3,
+    ) -> Vector3 {
         if let Some((hit, obj)) = world.hit_scene(ray, 0.001, f64::INFINITY) {
-            // 発光を取得
             let emitted = obj.material.emit(&hit.point, &hit.normal);
 
-            // 入射方向（レイの方向）
-            let incoming = ray.direction;
+            // 光源に当たった場合は発光を返す
+            if emitted.length() > 0.0 {
+                return emitted;
+            }
 
-            // オブジェクトのサンプリング戦略を使って方向を生成し、BSDFとPDFを同時に取得
-            let incoming_ray = Ray::new(hit.point, -incoming);
-            let (scattered_direction, brdf, pdf) = obj.bsdf_pdf_sample(&hit.point, &incoming_ray, &hit.normal, rng);
-            let scattered_ray = Ray::new(hit.point, scattered_direction);
+            // BSDFサンプリング
+            ray.set_eta_ratio(Self::get_eta_from_object(obj, &hit, ray));
+            let (scattered_direction, bsdf, pdf, cos_theta) =
+                obj.bsdf_pdf_sample(&hit.point, ray, &hit.normal, rng);
+            let mut scattered_ray = Ray::new(hit.point, scattered_direction);
+            scattered_ray.set_eta_ratio(Self::get_eta_from_object(obj, &hit, &scattered_ray));
 
-            // コサイン項（入射角度による減衰）
-            let cos_theta = scattered_direction.dot(&hit.normal).max(0.0);
+            let next_throughput = throughput * bsdf * cos_theta / pdf;
 
-            // 入射輝度を再帰的に計算
-            let incoming_light = Self::ray_color(world, &scattered_ray, depth - 1, false, rng);
+            // ロシアンルーレット：累積throughputの輝度を使用
+            let rr_prob = if depth < MIN_DEPTH {
+                1.0
+            } else if depth >= MAX_DEPTH {
+                // MAX_DEPTHを超えたら確率を急激に下げる
+                let excess_depth = (depth - MAX_DEPTH + 1) as f64;
+                (next_throughput.luminance() / (2.0_f64.powf(excess_depth))).max(0.01)
+            } else {
+                next_throughput.luminance().min(1.0)
+            };
+            if rng.random::<f64>() > rr_prob {
+                return Vector3::zero();
+            }
 
-            // レンダリング方程式: 発光 + brdf * 入射輝度 * cos(θ) / pdf
-            return emitted + brdf * incoming_light * cos_theta / pdf;
+            // 再帰的にレイトレース
+            let incoming_light =
+                Self::ray_color(world, &mut scattered_ray, depth + 1, rng, next_throughput);
+
+            // レンダリング方程式: brdf * 入射輝度 * cos(θ) / (pdf * rr_prob)
+            return bsdf * incoming_light * cos_theta / (pdf * rr_prob);
         }
 
         // 背景は黒
         Vector3::zero()
+    }
+
+    fn get_eta_from_object(object: &Object, hit: &HitRecord, incoming: &Ray) -> f64 {
+        let cos_theta_i = hit.normal.dot(&(-incoming.direction)).clamp(-1.0, 1.0);
+        // cos_theta_i > 0: レイが外から来る (空気→ガラス) → eta = n_air/n_glass
+        // cos_theta_i < 0: レイが内から来る (ガラス→空気) → eta = n_glass/n_air
+        match cos_theta_i > 0.0 {
+            true => 1.0 / object.material.get_eta(),
+            false => object.material.get_eta(),
+        }
     }
 }

@@ -49,7 +49,7 @@ impl Object {
         ray: &Ray,
         normal: &Vector3,
         rng: &mut R,
-    ) -> (Vector3, Vector3, f64) {
+    ) -> (Vector3, Vector3, f64, f64) {
         self.material.bsdf_pdf_sample(x, ray, normal, rng)
     }
 }

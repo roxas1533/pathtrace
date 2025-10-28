@@ -27,17 +27,19 @@ pub trait Material: Send + Sync {
     /// * `rng` - 乱数生成器
     ///
     /// # Returns
-    /// (sampled_direction, bsdf, pdf) のタプル
+    /// (sampled_direction, bsdf, pdf, cos_theta) のタプル
+    /// cos_thetaは既にBSDFに含まれている場合は1.0を返す
     fn bsdf_pdf_sample(
         &self,
         x: &Vector3,
         ray: &Ray,
         normal: &Vector3,
         rng: &mut dyn RngCore,
-    ) -> (Vector3, Vector3, f64) {
+    ) -> (Vector3, Vector3, f64, f64) {
         let sampled_direction = self.sample_direction(normal, ray, rng);
         let (bsdf, pdf) = self.bsdf_pdf(x, ray, &sampled_direction, normal);
-        (sampled_direction, bsdf, pdf)
+        let cos_theta = sampled_direction.dot(normal).abs();
+        (sampled_direction, bsdf, pdf, cos_theta)
     }
 
     /// サンプリング方向を生成
@@ -342,19 +344,11 @@ impl Mirror {
         let d = alpha2 / (std::f64::consts::PI * denom * denom);
 
         //G
-        let lambda_a =
-            |v: &Vector3| -> f64 { (-1.0 + (1.0 + alpha2 * tan2(*v, *normal)).sqrt()) / 2.0 };
-        let g = 1.0 / (1.0 + lambda_a(&i) + lambda_a(o));
+        let g = self.get_g(normal.dot(&i).abs(), normal.dot(o).abs());
 
         //F
         let cos_theta = i.dot(&h).max(0.0);
-        // 誘電体のF0をIORから計算: F0 = ((1-ior)/(1+ior))^2
-        let f0_dielectric = ((1.0 - self.ior) / (1.0 + self.ior)).powi(2);
-        let f0_dielectric_vec = Vector3::new(f0_dielectric, f0_dielectric, f0_dielectric);
-        // 金属のF0は色（波長依存の反射率）
-        let f0 = f0_dielectric_vec * (1.0 - self.metallic) + self.color * self.metallic;
-        // Schlick近似でFresnelを計算
-        let f = f0 + (Vector3::new(1.0, 1.0, 1.0) - f0) * (1.0 - cos_theta).powi(5);
+        let f = self.get_f(cos_theta);
 
         let brdf = d * g * f / (4.0 * normal.dot(&i).abs() * normal.dot(o).abs());
         let pdf = d * normal.dot(&h).abs() / (4.0 * i.dot(&h).abs());
@@ -376,22 +370,14 @@ impl Mirror {
         let d = alpha2 / (std::f64::consts::PI * denom * denom);
 
         //G
-        let lambda_a =
-            |v: &Vector3| -> f64 { (-1.0 + (1.0 + alpha2 * tan2(*v, *normal)).sqrt()) / 2.0 };
-        let g = 1.0 / (1.0 + lambda_a(&i) + lambda_a(o));
+        let g = self.get_g(normal.dot(&i).abs(), normal.dot(o).abs());
 
         //F
         let i_dot_h = i.dot(&h);
         let o_dot_h = o.dot(&h);
         let cos_theta = i_dot_h.abs();
 
-        // 誘電体のF0をIORから計算
-        let f0_dielectric = ((1.0 - self.ior) / (1.0 + self.ior)).powi(2);
-        let f0_dielectric_vec = Vector3::new(f0_dielectric, f0_dielectric, f0_dielectric);
-        // 金属のF0は色（波長依存の反射率）
-        let f0 = f0_dielectric_vec * (1.0 - self.metallic) + self.color * self.metallic;
-        // Schlick近似でFresnelを計算
-        let f = f0 + (Vector3::new(1.0, 1.0, 1.0) - f0) * (1.0 - cos_theta).powi(5);
+        let f = self.get_f(cos_theta);
 
         let i_n = normal.dot(&i).abs();
         let o_n = normal.dot(o).abs();
@@ -406,24 +392,23 @@ impl Mirror {
 
         (btdf, pdf)
     }
-    fn sample_direction_btdf(
-        &self,
-        normal: &Vector3,
-        incoming: &Ray,
-        rng: &mut dyn RngCore,
-    ) -> Vector3 {
-        // incomingは表面に向かう方向なので、表面から外向きに変換
-        let half_vector = self.get_half_vector(normal, rng);
-        let i = -incoming.direction;
-        let eta = incoming.eta_ratio;
-        let cos_theta_i = normal.dot(&i);
-        let cos_theta_t2 = 1.0 - (eta * eta) * (1.0 - cos_theta_i * cos_theta_i);
-        if cos_theta_t2 < 0.0 {
-            // 全反射
-            return Vector3::zero();
-        }
-        let cos_theta_t = cos_theta_t2.sqrt();
-        eta * -i + (eta * cos_theta_i - cos_theta_t) * half_vector
+
+    fn get_f(&self, cos_theta: f64) -> Vector3 {
+        // 誘電体のF0をIORから計算: F0 = ((1-ior)/(1+ior))^2
+        let f0_dielectric = ((1.0 - self.ior) / (1.0 + self.ior)).powi(2);
+        let f0_dielectric_vec = Vector3::new(f0_dielectric, f0_dielectric, f0_dielectric);
+        let f0 = f0_dielectric_vec * (1.0 - self.metallic) + self.color * self.metallic;
+        f0 + (Vector3::new(1.0, 1.0, 1.0) - f0) * (1.0 - cos_theta).powi(5)
+    }
+
+    fn get_g(&self, _cos_theta_i: f64, _cos_theta_o: f64) -> f64 {
+        // SmithのG関数（GGX）
+        let alpha = self.roughness * self.roughness;
+        let lambda = |cos_theta: f64| -> f64 {
+            let tan_theta = ((1.0 - cos_theta * cos_theta) / (cos_theta * cos_theta)).sqrt();
+            (-1.0 + (1.0 + alpha * alpha * tan_theta * tan_theta).sqrt()) / 2.0
+        };
+        1.0 / (1.0 + lambda(_cos_theta_i) + lambda(_cos_theta_o))
     }
 }
 
@@ -436,79 +421,91 @@ impl Material for Mirror {
 
         if i_dot_n * o_dot_n > 0.0 {
             // 反射（BRDF）
-            self.brdf(ray, o, normal)
+            let (brdf, pdf_brdf) = self.brdf(ray, o, normal);
+
+            // ロシアンルーレット確率を計算
+            let h = (i + *o).normalize();
+            let cos_theta = i.dot(&h).max(0.0);
+            let fresnel_vec = self.get_f(cos_theta);
+            let fresnel_prob = fresnel_vec.x;
+
+            // BRDFはFresnelを含み、PDFはロシアンルーレット確率を含む
+            (brdf, pdf_brdf * fresnel_prob)
         } else {
             // 透過（BTDF）
-            self.btdf(ray, o, normal)
+            let (btdf, pdf_btdf) = self.btdf(ray, o, normal);
+
+            // ロシアンルーレット確率を計算
+            let eta = ray.eta_ratio;
+            let h = -(i * eta + *o).normalize();
+            let cos_theta = i.dot(&h).abs();
+            let fresnel_vec = self.get_f(cos_theta);
+
+            // 全反射チェック
+            let sin2_theta_i = 1.0 - cos_theta * cos_theta;
+            let cos2_theta_t = 1.0 - (eta * eta) * sin2_theta_i;
+            let transmit_prob = if cos2_theta_t < 0.0 {
+                0.0  // 全反射の場合、透過確率は0
+            } else {
+                1.0 - fresnel_vec.x
+            };
+
+            // BTDFは(1-Fresnel)を含み、PDFはロシアンルーレット確率を含む
+            (btdf, pdf_btdf * transmit_prob)
         }
     }
 
     fn bsdf_pdf_sample(
         &self,
-        x: &Vector3,
+        _x: &Vector3,
         ray: &Ray,
         normal: &Vector3,
         rng: &mut dyn RngCore,
-    ) -> (Vector3, Vector3, f64) {
+    ) -> (Vector3, Vector3, f64, f64) {
         let i = -ray.direction; // 表面から外向きの方向
         let i_dot_n = i.dot(normal);
+        let eta = ray.eta_ratio;
 
-        if i_dot_n.abs() < 1e-6 {
-            // デジェネレートケース
-            return (Vector3::zero(), Vector3::zero(), 1.0);
+        let mut half_vector = self.get_half_vector(normal, rng);
+        // ハーフベクトルを入射方向と同じ半球に配置
+        if i.dot(&half_vector) < 0.0 {
+            half_vector = -half_vector;
         }
+        let i_h = i.dot(&half_vector);
 
         // まずFresnelを評価して反射/透過を決定
-        let cos_theta_i = i_dot_n.abs();
-        let f0 = ((1.0 - self.ior) / (1.0 + self.ior)).powi(2);
-        let fresnel = f0 + (1.0 - f0) * (1.0 - cos_theta_i).powi(5);
+        let fresnel_vec = self.get_f(i_h);
 
         // 透過可能かチェック
-        let eta = ray.eta_ratio;
-        let sin2_theta_i = 1.0 - cos_theta_i * cos_theta_i;
-        let sin2_theta_t = eta * eta * sin2_theta_i;
-        let can_refract = sin2_theta_t < 1.0;
+        let sin2_theta_i = 1.0 - i_h * i_h;
+        let cos2_theta_t = 1.0 - (eta * eta) * sin2_theta_i;
+        let total_reflection = cos2_theta_t < 0.0;
 
         // ロシアンルーレットで反射/透過を選択
-        let is_reflect = rng.random::<f64>() < fresnel || !can_refract;
+        let is_reflect = rng.random::<f64>() < fresnel_vec.x || total_reflection;
+
+        if i_h < 1e-6 {
+            return (Vector3::zero(), Vector3::zero(), 1.0, 1.0);
+        }
+        let n_h = normal.dot(&half_vector).max(0.0);
 
         if is_reflect {
-            // 反射の場合：反射用のhalf vectorをサンプリング
-            let half_vector = self.get_half_vector(normal, rng);
-            let i_h = i.dot(&half_vector).abs();
-
-            if i_h < 1e-6 {
-                return (Vector3::zero(), Vector3::zero(), 1.0);
-            }
-
-            let o_reflect = 2.0 * i.dot(&half_vector) * half_vector - i;
-            let (bsdf, pdf) = self.brdf(ray, &o_reflect, normal);
-            (o_reflect, bsdf, pdf)
+            // 反射方向を計算
+            let o = 2.0 * i.dot(&half_vector) * half_vector - i;
+            let g = self.get_g(normal.dot(&i).abs(), normal.dot(&o).abs());
+            let o_h = i_h;
+            let brdf = fresnel_vec * g * o_h / (i_dot_n.abs() * n_h);
+            // cos_thetaは既にBRDFに含まれているので1.0を返す
+            (o.normalize(), brdf, 1.0, 1.0)
         } else {
-            // 透過の場合：透過用のhalf vectorをサンプリング
-            let half_vector = self.get_half_vector(normal, rng);
-            let i_h = i.dot(&half_vector);
+            // 屈折方向：o = eta * (-i) + (eta * cos_theta_i - cos_theta_t) * h
+            let cos_theta_t = cos2_theta_t.sqrt();
+            let o = half_vector * (eta * i_h - cos_theta_t) - i * eta;
 
-            if i_h.abs() < 1e-6 {
-                return (Vector3::zero(), Vector3::zero(), 1.0);
-            }
-
-            // half vectorから透過方向を計算
-            // h = -(eta_i * i + eta_t * o) / |...|
-            // => o = -(h * |...| + eta_i * i) / eta_t
-            // より簡単な形式: o = eta * (-i) + (eta * (i·h) - sqrt(...)) * h
-            let eta_ih = eta * i_h;
-            let k = 1.0 - eta * eta * (1.0 - i_h * i_h);
-
-            let o_refract = if k >= 0.0 {
-                eta * (-i) + (eta_ih - k.sqrt()) * half_vector
-            } else {
-                // 全反射の場合は反射方向に戻す
-                2.0 * i.dot(&half_vector) * half_vector - i
-            };
-
-            let (bsdf, pdf) = self.btdf(ray, &o_refract, normal);
-            (o_refract, bsdf, pdf)
+            let g = self.get_g(normal.dot(&i).abs(), normal.dot(&o).abs());
+            let btdf = (Vector3::one() - fresnel_vec) * g * i_h / (i_dot_n.abs() * n_h);
+            // cos_thetaは既にBTDFに含まれているので1.0を返す
+            (o.normalize(), btdf, 1.0, 1.0)
         }
     }
 

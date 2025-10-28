@@ -13,9 +13,9 @@ use crate::rendering::RenderingStrategy;
 use rand::Rng;
 use std::sync::Mutex;
 
-pub const WIDTH: u32 = 300;
-pub const HEIGHT: u32 = 200;
-pub const SAMPLE_NUM: u32 = 500;
+pub const WIDTH: u32 = 400;
+pub const HEIGHT: u32 = 400;
+pub const SAMPLE_NUM: u32 = 1000;
 
 #[derive(Clone, Copy)]
 pub struct Color {
@@ -117,7 +117,7 @@ impl World {
                     Vector3::new(box_size, -box_size, box_depth - box_size),
                     Vector3::new(box_size, box_size, box_depth - box_size),
                 )),
-                Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
+                Box::new(LambertianCosineWeighted::new(Vector3::new(0.2, 0.2, 0.8))),
             ),
             Object::new(
                 Box::new(TriangleShape::new(
@@ -125,7 +125,7 @@ impl World {
                     Vector3::new(box_size, box_size, box_depth - box_size),
                     Vector3::new(-box_size, box_size, box_depth - box_size),
                 )),
-                Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
+                Box::new(LambertianCosineWeighted::new(Vector3::new(0.2, 0.2, 0.8))),
             ),
             // 下壁（白）- 2つの三角形
             Object::new(
@@ -134,7 +134,7 @@ impl World {
                     Vector3::new(box_size, -box_size, box_depth + box_size),
                     Vector3::new(box_size, -box_size, box_depth - box_size),
                 )),
-                Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
+                Box::new(LambertianCosineWeighted::new(Vector3::new(0.2, 0.8, 0.8))),
             ),
             Object::new(
                 Box::new(TriangleShape::new(
@@ -142,7 +142,7 @@ impl World {
                     Vector3::new(-box_size, -box_size, box_depth + box_size),
                     Vector3::new(box_size, -box_size, box_depth + box_size),
                 )),
-                Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
+                Box::new(LambertianCosineWeighted::new(Vector3::new(0.2, 0.8, 0.8))),
             ),
             // 上壁（白）- 2つの三角形
             Object::new(
@@ -196,19 +196,19 @@ impl World {
                     ior: 1.5,
                 }),
             ),
-            // PBR球（右側）
-            Object::new(
-                Box::new(SphereShape::new(Vector3::new(0.4, -0.5, box_depth), 0.4)),
-                Box::new(PBRMaterial::new(
-                    0.3,                              // roughness: やや滑らかなプラスチック
-                    Vector3::new(0.1, 0.1, 0.8), // albedo: 青色
-                    0.0                               // metallic: 非金属（プラスチック）
-                )),
-            ),
+            // // PBR球（右側）
             // Object::new(
             //     Box::new(SphereShape::new(Vector3::new(0.4, -0.5, box_depth), 0.4)),
-            //     Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
+            //     Box::new(PBRMaterial::new(
+            //         0.3,                              // roughness: やや滑らかなプラスチック
+            //         Vector3::new(0.1, 0.1, 0.8), // albedo: 青色
+            //         0.0                               // metallic: 非金属（プラスチック）
+            //     )),
             // ),
+            Object::new(
+                Box::new(SphereShape::new(Vector3::new(0.4, -0.5, box_depth), 0.4)),
+                Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
+            ),
         ];
 
         // 光源オブジェクトを識別
@@ -300,11 +300,11 @@ impl World {
 
             #[cfg(feature = "nee")]
             {
-                color_temp += NeeStrategy::ray_color(self, &ray, 0, true, rng);
+                color_temp += NeeStrategy::ray_color(self, &mut ray, 0, rng, Vector3::one());
             }
             #[cfg(feature = "brdf_only")]
             {
-                color_temp += BrdfOnlyStrategy::ray_color(self, &ray, 0, true, rng);
+                color_temp += BrdfOnlyStrategy::ray_color(self, &mut ray, 0, rng, Vector3::one());
             }
             #[cfg(feature = "mis")]
             {
