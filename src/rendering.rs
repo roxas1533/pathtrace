@@ -17,7 +17,12 @@ pub trait RenderingStrategy {
         rng: &mut impl Rng,
         throughput: Vector3,
     ) -> Vector3;
-    fn get_eta_from_object(object: &Object, hit: &HitRecord, incoming: &Ray) -> f64;
+    fn get_eta_from_object(object: &Object, hit: &HitRecord, _incoming: &Ray) -> f64 {
+        match hit.front_face {
+            true => 1.0 / object.material.get_eta(), // 外から入る: 空気→ガラス
+            false => object.material.get_eta(),      // 内から出る: ガラス→空気
+        }
+    }
 }
 
 /// MIS（Multiple Importance Sampling）戦略
@@ -83,18 +88,18 @@ impl RenderingStrategy for MisStrategy {
 
             let next_throughput = throughput * bsdf * cos_theta / pdf;
 
-            // ロシアンルーレット：累積throughputの輝度を使用
+            let next_throughput = throughput * bsdf * cos_theta / pdf;
+
             let rr_prob = if depth < MIN_DEPTH {
                 1.0
             } else if depth >= MAX_DEPTH {
-                // MAX_DEPTHを超えたら確率を急激に下げる
-                let excess_depth = (depth - MAX_DEPTH + 1) as f64;
-                (next_throughput.luminance() / (2.0_f64.powf(excess_depth))).max(0.01)
+                let l = next_throughput.luminance().min(1.0);
+                l * 0.5_f64.powi((depth - MIN_DEPTH) as i32)
             } else {
                 next_throughput.luminance().min(1.0)
             };
             if rng.random::<f64>() > rr_prob {
-                return total_radiance;
+                return Vector3::zero();
             }
 
             if let Some((scattered_hit, obj)) =
@@ -120,8 +125,13 @@ impl RenderingStrategy for MisStrategy {
                         / (pdf * rr_prob);
                 } else {
                     // BSDFサンプリングによる再帰
-                    let incoming_light =
-                        Self::ray_color(world, &mut scattered_ray, depth + 1, rng, next_throughput);
+                    let incoming_light = Self::ray_color(
+                        world,
+                        &mut scattered_ray,
+                        depth + 1,
+                        rng,
+                        next_throughput / rr_prob,
+                    );
                     total_radiance += bsdf * incoming_light * cos_theta / (pdf * rr_prob);
                 }
             }
@@ -131,16 +141,6 @@ impl RenderingStrategy for MisStrategy {
 
         // 背景は黒
         Vector3::zero()
-    }
-
-    fn get_eta_from_object(object: &Object, hit: &HitRecord, incoming: &Ray) -> f64 {
-        let cos_theta_i = hit.normal.dot(&(-incoming.direction)).clamp(-1.0, 1.0);
-        // cos_theta_i > 0: レイが外から来る (空気→ガラス) → eta = n_air/n_glass
-        // cos_theta_i < 0: レイが内から来る (ガラス→空気) → eta = n_glass/n_air
-        match cos_theta_i > 0.0 {
-            true => 1.0 / object.material.get_eta(),
-            false => object.material.get_eta(),
-        }
     }
 }
 /// NEE（Next Event Estimation）戦略
@@ -237,13 +237,11 @@ impl RenderingStrategy for BrdfOnlyStrategy {
 
             let next_throughput = throughput * bsdf * cos_theta / pdf;
 
-            // ロシアンルーレット：累積throughputの輝度を使用
             let rr_prob = if depth < MIN_DEPTH {
                 1.0
             } else if depth >= MAX_DEPTH {
-                // MAX_DEPTHを超えたら確率を急激に下げる
-                let excess_depth = (depth - MAX_DEPTH + 1) as f64;
-                (next_throughput.luminance() / (2.0_f64.powf(excess_depth))).max(0.01)
+                let l = next_throughput.luminance().min(1.0);
+                l * 0.5_f64.powi((depth - MIN_DEPTH) as i32)
             } else {
                 next_throughput.luminance().min(1.0)
             };
@@ -252,8 +250,13 @@ impl RenderingStrategy for BrdfOnlyStrategy {
             }
 
             // 再帰的にレイトレース
-            let incoming_light =
-                Self::ray_color(world, &mut scattered_ray, depth + 1, rng, next_throughput);
+            let incoming_light = Self::ray_color(
+                world,
+                &mut scattered_ray,
+                depth + 1,
+                rng,
+                next_throughput / rr_prob,
+            );
 
             // レンダリング方程式: brdf * 入射輝度 * cos(θ) / (pdf * rr_prob)
             return bsdf * incoming_light * cos_theta / (pdf * rr_prob);
@@ -261,15 +264,5 @@ impl RenderingStrategy for BrdfOnlyStrategy {
 
         // 背景は黒
         Vector3::zero()
-    }
-
-    fn get_eta_from_object(object: &Object, hit: &HitRecord, incoming: &Ray) -> f64 {
-        let cos_theta_i = hit.normal.dot(&(-incoming.direction)).clamp(-1.0, 1.0);
-        // cos_theta_i > 0: レイが外から来る (空気→ガラス) → eta = n_air/n_glass
-        // cos_theta_i < 0: レイが内から来る (ガラス→空気) → eta = n_glass/n_air
-        match cos_theta_i > 0.0 {
-            true => 1.0 / object.material.get_eta(),
-            false => object.material.get_eta(),
-        }
     }
 }

@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 pub const WIDTH: u32 = 400;
 pub const HEIGHT: u32 = 400;
-pub const SAMPLE_NUM: u32 = 1000;
+pub const SAMPLE_NUM: u32 = 30000;
 
 #[derive(Clone, Copy)]
 pub struct Color {
@@ -162,52 +162,49 @@ impl World {
                 Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
             ),
             // 天井の光源
-            Object::new(
-                Box::new(TriangleShape::new(
-                    Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
-                    Vector3::new(light_size, box_size - 0.01, box_depth - light_size),
-                    Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
-                )),
-                Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
-            ),
-            Object::new(
-                Box::new(TriangleShape::new(
-                    Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
-                    Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
-                    Vector3::new(-light_size, box_size - 0.01, box_depth + light_size),
-                )),
-                Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
-            ),
-            // 球体光源
             // Object::new(
-            //     Box::new(SphereShape::new(
-            //         Vector3::new(0.0, box_size - 0.21, box_depth),
-            //         0.2,
+            //     Box::new(TriangleShape::new(
+            //         Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
+            //         Vector3::new(light_size, box_size - 0.01, box_depth - light_size),
+            //         Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
             //     )),
             //     Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
             // ),
-            // ガラス球（左側）
+            // Object::new(
+            //     Box::new(TriangleShape::new(
+            //         Vector3::new(-light_size, box_size - 0.01, box_depth - light_size),
+            //         Vector3::new(light_size, box_size - 0.01, box_depth + light_size),
+            //         Vector3::new(-light_size, box_size - 0.01, box_depth + light_size),
+            //     )),
+            //     Box::new(Emissive::new(Vector3::new(15.0, 15.0, 15.0))),
+            // ),
+            // 球体光源
             Object::new(
-                Box::new(SphereShape::new(Vector3::new(-0.4, -0.5, box_depth), 0.4)),
+                Box::new(SphereShape::new(
+                    Vector3::new(0.0, box_size - 0.21, box_depth),
+                    0.2,
+                )),
+                Box::new(Emissive::new(Vector3::new(36.0, 36.0, 36.0))),
+            ),
+            // 鏡面反射球（metallic=1）
+            Object::new(
+                Box::new(SphereShape::new(Vector3::new(-0.2, -0.6, box_depth), 0.4)),
+                Box::new(Mirror {
+                    roughness: 0.01,
+                    color: Vector3::new(1.0, 1.0, 1.0),
+                    metallic: 1.0,
+                    ior: 1.5,
+                }),
+            ),
+            // ガラス球
+            Object::new(
+                Box::new(SphereShape::new(Vector3::new(0.4, -0.8, box_depth + 0.3), 0.2)),
                 Box::new(Mirror {
                     roughness: 0.01,
                     color: Vector3::new(1.0, 1.0, 1.0),
                     metallic: 0.0,
                     ior: 1.5,
                 }),
-            ),
-            // // PBR球（右側）
-            // Object::new(
-            //     Box::new(SphereShape::new(Vector3::new(0.4, -0.5, box_depth), 0.4)),
-            //     Box::new(PBRMaterial::new(
-            //         0.3,                              // roughness: やや滑らかなプラスチック
-            //         Vector3::new(0.1, 0.1, 0.8), // albedo: 青色
-            //         0.0                               // metallic: 非金属（プラスチック）
-            //     )),
-            // ),
-            Object::new(
-                Box::new(SphereShape::new(Vector3::new(0.4, -0.5, box_depth), 0.4)),
-                Box::new(LambertianCosineWeighted::new(Vector3::new(0.8, 0.8, 0.8))),
             ),
         ];
 

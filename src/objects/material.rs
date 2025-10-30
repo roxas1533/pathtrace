@@ -38,7 +38,7 @@ pub trait Material: Send + Sync {
     ) -> (Vector3, Vector3, f64, f64) {
         let sampled_direction = self.sample_direction(normal, ray, rng);
         let (bsdf, pdf) = self.bsdf_pdf(x, ray, &sampled_direction, normal);
-        let cos_theta = sampled_direction.dot(normal).abs();
+        let cos_theta = sampled_direction.dot(normal).max(0.0);
         (sampled_direction, bsdf, pdf, cos_theta)
     }
 
@@ -306,7 +306,7 @@ pub struct Mirror {
     pub color: Vector3,
     /// 金属度合（0=誘電体、1=金属）
     pub metallic: f64,
-    /// 屈折率（IOR）metallic < 1.0の場合に使用
+    /// 屈折率（IOR）
     pub ior: f64,
 }
 
@@ -344,14 +344,19 @@ impl Mirror {
         let d = alpha2 / (std::f64::consts::PI * denom * denom);
 
         //G
-        let g = self.get_g(normal.dot(&i).abs(), normal.dot(o).abs());
+        let i_n = normal.dot(&i).max(0.0);
+        let o_n = normal.dot(o).max(0.0);
+        let g = self.get_g(i_n, o_n);
 
         //F
         let cos_theta = i.dot(&h).max(0.0);
         let f = self.get_f(cos_theta);
 
-        let brdf = d * g * f / (4.0 * normal.dot(&i).abs() * normal.dot(o).abs());
-        let pdf = d * normal.dot(&h).abs() / (4.0 * i.dot(&h).abs());
+        let denom_brdf = 4.0 * i_n * o_n;
+        let brdf = d * g * f / denom_brdf;
+
+        let i_h = i.dot(&h).abs();
+        let pdf = d * normal.dot(&h).abs() / (4.0 * i_h);
 
         (brdf, pdf)
     }
@@ -370,7 +375,9 @@ impl Mirror {
         let d = alpha2 / (std::f64::consts::PI * denom * denom);
 
         //G
-        let g = self.get_g(normal.dot(&i).abs(), normal.dot(o).abs());
+        let i_n = normal.dot(&i).abs();
+        let o_n = normal.dot(o).abs();
+        let g = self.get_g(i_n, o_n);
 
         //F
         let i_dot_h = i.dot(&h);
@@ -379,14 +386,11 @@ impl Mirror {
 
         let f = self.get_f(cos_theta);
 
-        let i_n = normal.dot(&i).abs();
-        let o_n = normal.dot(o).abs();
-
         let denom_term = eta * i_dot_h + o_dot_h;
         let btdf = (Vector3::one() - f) * d * g * i_dot_h.abs() * o_dot_h.abs()
             / (i_n * o_n * denom_term * denom_term);
 
-        let jacobian = o_dot_h.abs() / (eta * eta * denom_term * denom_term);
+        let jacobian = o_dot_h.abs() / (denom_term * denom_term);
 
         let pdf = d * n_dot_h.abs() * jacobian;
 
@@ -419,7 +423,9 @@ impl Material for Mirror {
         let i_dot_n = i.dot(normal);
         let o_dot_n = o.dot(normal);
 
-        if i_dot_n * o_dot_n > 0.0 {
+        // 金属の場合は透過しないので、反射のみ
+        let is_reflection = i_dot_n * o_dot_n > 0.0;
+        if is_reflection || self.metallic > 0.99 {
             // 反射（BRDF）
             let (brdf, pdf_brdf) = self.brdf(ray, o, normal);
 
@@ -427,10 +433,14 @@ impl Material for Mirror {
             let h = (i + *o).normalize();
             let cos_theta = i.dot(&h).max(0.0);
             let fresnel_vec = self.get_f(cos_theta);
-            let fresnel_prob = fresnel_vec.x;
+            let fresnel_prob = if self.metallic > 0.99 {
+                1.0  // 金属は常に反射
+            } else {
+                fresnel_vec.x
+            };
 
-            // BRDFはFresnelを含み、PDFはロシアンルーレット確率を含む
-            (brdf, pdf_brdf * fresnel_prob)
+            // BRDFを選択確率で割り、PDFには確率を含めない（透過と同じ方式）
+            (brdf / fresnel_prob, pdf_brdf)
         } else {
             // 透過（BTDF）
             let (btdf, pdf_btdf) = self.btdf(ray, o, normal);
@@ -445,13 +455,13 @@ impl Material for Mirror {
             let sin2_theta_i = 1.0 - cos_theta * cos_theta;
             let cos2_theta_t = 1.0 - (eta * eta) * sin2_theta_i;
             let transmit_prob = if cos2_theta_t < 0.0 {
-                0.0  // 全反射の場合、透過確率は0
+                0.0 // 全反射の場合、透過確率は0
             } else {
                 1.0 - fresnel_vec.x
             };
 
-            // BTDFは(1-Fresnel)を含み、PDFはロシアンルーレット確率を含む
-            (btdf, pdf_btdf * transmit_prob)
+            // BTDFを選択確率で割り、PDFには確率を含めない（bsdf_pdf_sampleと同じ方式）
+            (btdf / transmit_prob, pdf_btdf)
         }
     }
 
@@ -466,46 +476,77 @@ impl Material for Mirror {
         let i_dot_n = i.dot(normal);
         let eta = ray.eta_ratio;
 
-        let mut half_vector = self.get_half_vector(normal, rng);
-        // ハーフベクトルを入射方向と同じ半球に配置
-        if i.dot(&half_vector) < 0.0 {
-            half_vector = -half_vector;
-        }
-        let i_h = i.dot(&half_vector);
+        // マイクロファセット法線をサンプリング
+        let h = self.get_half_vector(normal, rng);
 
-        // まずFresnelを評価して反射/透過を決定
-        let fresnel_vec = self.get_f(i_h);
+        // ハーフベクトルが入射方向と同じ半球にあることを確認
+        let i_h = i.dot(&h);
+        if i_h <= 0.0 {
+            return (*normal, Vector3::zero(), 1.0, 0.0);
+        }
+
+        // Fresnelを評価して反射/透過を決定
+        let mut fresnel_vec = self.get_f(i_h);
 
         // 透過可能かチェック
         let sin2_theta_i = 1.0 - i_h * i_h;
         let cos2_theta_t = 1.0 - (eta * eta) * sin2_theta_i;
         let total_reflection = cos2_theta_t < 0.0;
 
-        // ロシアンルーレットで反射/透過を選択
-        let is_reflect = rng.random::<f64>() < fresnel_vec.x || total_reflection;
-
-        if i_h < 1e-6 {
-            return (Vector3::zero(), Vector3::zero(), 1.0, 1.0);
+        let mut rr_f = fresnel_vec.x;
+        if total_reflection || self.metallic > 0.99 {
+            // 全反射または金属の場合は、常に反射のみ
+            rr_f = 1.0;
+            fresnel_vec = Vector3::new(1.0, 1.0, 1.0);
         }
-        let n_h = normal.dot(&half_vector).max(0.0);
+
+        // ロシアンルーレットで反射/透過を選択
+        let is_reflect = rng.random::<f64>() < rr_f;
+
+        // D項（GGX）
+        let alpha = self.roughness * self.roughness;
+        let alpha2 = alpha * alpha;
+        let n_h = normal.dot(&h);
+        let denom = (n_h * n_h) * (alpha2 - 1.0) + 1.0;
+        let d = alpha2 / (std::f64::consts::PI * denom * denom);
 
         if is_reflect {
-            // 反射方向を計算
-            let o = 2.0 * i.dot(&half_vector) * half_vector - i;
-            let g = self.get_g(normal.dot(&i).abs(), normal.dot(&o).abs());
-            let o_h = i_h;
-            let brdf = fresnel_vec * g * o_h / (i_dot_n.abs() * n_h);
-            // cos_thetaは既にBRDFに含まれているので1.0を返す
-            (o.normalize(), brdf, 1.0, 1.0)
-        } else {
-            // 屈折方向：o = eta * (-i) + (eta * cos_theta_i - cos_theta_t) * h
-            let cos_theta_t = cos2_theta_t.sqrt();
-            let o = half_vector * (eta * i_h - cos_theta_t) - i * eta;
+            let o = 2.0 * i_h * h - i;
+            let o_normalized = o.normalize();
+            let o_n = normal.dot(&o_normalized).max(0.0);
+            let i_n = i_dot_n.max(0.0);
 
-            let g = self.get_g(normal.dot(&i).abs(), normal.dot(&o).abs());
-            let btdf = (Vector3::one() - fresnel_vec) * g * i_h / (i_dot_n.abs() * n_h);
-            // cos_thetaは既にBTDFに含まれているので1.0を返す
-            (o.normalize(), btdf, 1.0, 1.0)
+            let g = self.get_g(i_n, o_n);
+
+            let denom_brdf = 4.0 * i_n * o_n;
+            let brdf = fresnel_vec * d * g / (denom_brdf * rr_f);
+
+            let pdf = d * n_h.abs() / (4.0 * i_h.abs());
+            let cos_theta = o_n;
+
+            (o_normalized, brdf, pdf, cos_theta)
+        } else {
+            // 屈折方向を計算
+            let cos_theta_t = cos2_theta_t.sqrt();
+            let o = h * (eta * i_h - cos_theta_t) - i * eta;
+            let o_normalized = o.normalize();
+            let o_h = o_normalized.dot(&h);
+            let o_n = normal.dot(&o_normalized).abs();
+            let i_n = i_dot_n.abs();
+
+            let g = self.get_g(i_n, o_n);
+            let one_f = Vector3::one() - fresnel_vec;
+
+            // EPSILONを追加してゼロ除算を防ぐ
+            let denom_term = eta * i_h + o_h;
+            let btdf = one_f * d * g * i_h.abs() * o_h.abs()
+                / (i_n * o_n * denom_term * denom_term * (1.0 - rr_f));
+
+            let jacobian = o_h.abs() / (denom_term * denom_term);
+            let pdf = d * n_h.abs() * jacobian;
+            let cos_theta = o_n;
+
+            (o_normalized, btdf, pdf, cos_theta)
         }
     }
 
