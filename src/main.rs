@@ -46,7 +46,10 @@ fn main() -> Result<(), Error> {
 
         // rayonで並列処理：計算はロック外、書き込みだけロック
         pixels_coords.par_iter().for_each(|&(x, y)| {
-            let mut rng = rand::rng();
+            use rand::SeedableRng;
+            // seedを固定（ピクセル座標から決定的なseedを生成）
+            let seed = ((y as u64) << 32) | (x as u64);
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
             // ロック不要：読み取り専用の計算
             let color = world_clone.render_pixel(x, y, &mut rng);
@@ -55,6 +58,13 @@ fn main() -> Result<(), Error> {
             let index = (y * WIDTH + x) as usize;
             world_clone.data.lock().unwrap()[index] = color;
         });
+
+        // レンダリング完了後、輝度値を出力
+        println!("Rendering complete. Exporting luminance data...");
+        world_clone
+            .export_luminance("luminance.csv")
+            .expect("Failed to export luminance");
+        println!("Luminance data exported to luminance.csv");
     });
 
     window.request_redraw();

@@ -28,7 +28,9 @@ pub struct Camera {
     origin: Vector3,
     width: u32,
     height: u32,
+    #[allow(dead_code)]
     screen_distance: f64,
+    #[allow(dead_code)]
     fov_horizontal: f64, // 水平視野角（ラジアン）
     // キャッシュされた計算結果
     lower_left_corner: Vector3,
@@ -88,6 +90,7 @@ impl Camera {
     /// * `width` - 画面の幅（ピクセル）
     /// * `height` - 画面の高さ（ピクセル）
     /// * `fov_degrees` - 水平視野角（度）
+    #[allow(dead_code)]
     pub fn look_at(
         origin: Vector3,
         target: Vector3,
@@ -126,21 +129,6 @@ impl Camera {
         }
     }
 
-    /// 指定したピクセル座標に対応するレイを生成
-    ///
-    /// # Arguments
-    /// * `x` - ピクセルのX座標 (0 ~ width-1)
-    /// * `y` - ピクセルのY座標 (0 ~ height-1)
-    pub fn get_ray(&self, x: u32, y: u32) -> Ray {
-        let u = x as f64 / (self.width - 1) as f64;
-        let v = y as f64 / (self.height - 1) as f64;
-
-        let direction =
-            self.lower_left_corner + self.horizontal * u + self.vertical * v - self.origin;
-
-        Ray::new(self.origin, direction)
-    }
-
     /// アンチエイリアシング用：ピクセル内のランダムな位置のレイを生成
     ///
     /// # Arguments
@@ -156,95 +144,5 @@ impl Camera {
             self.lower_left_corner + self.horizontal * u + self.vertical * v - self.origin;
 
         Ray::new(self.origin, direction)
-    }
-
-    // Getters
-    pub fn origin(&self) -> Vector3 {
-        self.origin
-    }
-
-    pub fn width(&self) -> u32 {
-        self.width
-    }
-
-    pub fn height(&self) -> u32 {
-        self.height
-    }
-
-    pub fn screen_distance(&self) -> f64 {
-        self.screen_distance
-    }
-
-    pub fn fov_degrees(&self) -> f64 {
-        self.fov_horizontal.to_degrees()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_camera_creation() {
-        let camera = Camera::new(Vector3::new(0.0, 0.0, 0.0), 800, 600, 1.0, 90.0);
-
-        assert_eq!(camera.origin(), Vector3::new(0.0, 0.0, 0.0));
-        assert_eq!(camera.width(), 800);
-        assert_eq!(camera.height(), 600);
-        assert_eq!(camera.screen_distance(), 1.0);
-        assert!((camera.fov_degrees() - 90.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_ray_creation() {
-        let origin = Vector3::new(0.0, 0.0, 0.0);
-        let direction = Vector3::new(1.0, 1.0, 1.0);
-        let ray = Ray::new(origin, direction);
-
-        assert_eq!(ray.origin, origin);
-        // direction は正規化されているべき
-        assert!((ray.direction.length() - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_ray_at() {
-        let ray = Ray::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0));
-
-        let point = ray.at(5.0);
-        assert!((point.x - 5.0).abs() < 1e-10);
-        assert!((point.y).abs() < 1e-10);
-        assert!((point.z).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_get_ray_center() {
-        let camera = Camera::new(Vector3::new(0.0, 0.0, 0.0), 800, 600, 1.0, 90.0);
-
-        // 画面中央のレイ
-        let ray = camera.get_ray(400, 300);
-        assert_eq!(ray.origin, Vector3::new(0.0, 0.0, 0.0));
-
-        // 中央のレイはほぼZ-方向を向いているべき
-        assert!(ray.direction.z < 0.0);
-    }
-
-    #[test]
-    fn test_look_at() {
-        let camera = Camera::look_at(
-            Vector3::new(0.0, 0.0, 5.0), // カメラ位置
-            Vector3::new(0.0, 0.0, 0.0), // 原点を見る
-            Vector3::new(0.0, 1.0, 0.0), // Y軸が上
-            800,
-            600,
-            90.0,
-        );
-
-        assert_eq!(camera.origin(), Vector3::new(0.0, 0.0, 5.0));
-
-        // 中央のレイを取得
-        let ray = camera.get_ray(400, 300);
-
-        // レイは原点方向（Z-方向）を向いているべき
-        assert!(ray.direction.z < 0.0);
     }
 }

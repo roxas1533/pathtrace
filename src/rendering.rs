@@ -88,8 +88,6 @@ impl RenderingStrategy for MisStrategy {
 
             let next_throughput = throughput * bsdf * cos_theta / pdf;
 
-            let next_throughput = throughput * bsdf * cos_theta / pdf;
-
             let rr_prob = if depth < MIN_DEPTH {
                 1.0
             } else if depth >= MAX_DEPTH {
@@ -98,6 +96,7 @@ impl RenderingStrategy for MisStrategy {
             } else {
                 next_throughput.luminance().min(1.0)
             };
+
             if rng.random::<f64>() > rr_prob {
                 return Vector3::zero();
             }
@@ -116,13 +115,10 @@ impl RenderingStrategy for MisStrategy {
                         .shape
                         .sample_surface_from_point(&hit, Some(&scattered_hit), rng);
                     let w_bsdf = pdf / (pdf + pdf_shape);
-                    total_radiance += w_bsdf
-                        * bsdf
-                        * obj
-                            .material
-                            .emit(&scattered_hit.point, &scattered_hit.normal)
-                        * cos_theta
-                        / (pdf * rr_prob);
+                    let light_emission = obj.material.emit(&scattered_hit.point, &scattered_hit.normal);
+                    let light_contribution = w_bsdf * bsdf * light_emission * cos_theta / (pdf * rr_prob);
+
+                    total_radiance += light_contribution;
                 } else {
                     // BSDFサンプリングによる再帰
                     let incoming_light = Self::ray_color(
@@ -132,7 +128,9 @@ impl RenderingStrategy for MisStrategy {
                         rng,
                         next_throughput / rr_prob,
                     );
-                    total_radiance += bsdf * incoming_light * cos_theta / (pdf * rr_prob);
+                    let indirect_contribution = bsdf * incoming_light * cos_theta / (pdf * rr_prob);
+
+                    total_radiance += indirect_contribution;
                 }
             }
 

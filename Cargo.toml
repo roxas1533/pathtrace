@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["brdf_only"]
+default = ["mis"]
 nee = []
 brdf_only = []
 mis = []
